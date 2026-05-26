@@ -1,0 +1,139 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+pip-log.txt
+
+# --- Node / Frontend ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+out/
+coverage/
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Secrets / credentials (CRITICAL) ---
+.env
+.env.*
+!.env.example
+!.env.sample
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+credentials*.json
+credentials*.txt
+credentials*.yml
+credentials*.yaml
+service-account*.json
+service_account*.json
+secrets.*
+*.secret
+google-services.json
+firebase-*.json
+aws_credentials
+.aws/
+
+# --- Large binary / regenerable media ---
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.compare.json
+*.lifelog.json
+lifelog_processed.json
+
+# --- Model weights / huge files ---
+*.gguf
+*.safetensors
+*.bin
+*.onnx
+*.tflite
+*.h5
+*.pt
+*.pth
+# NOTE: 'models/' broadly would clobber backend/app/models/ (Pydantic/DB
+# source code). Be specific about which models/ dirs are ML weights.
+backend/glasses_watcher/models/
+edge-ai/models/
+ml/models/
+checkpoints/
+weights/
+.cache/
+.huggingface/
+
+# --- Database / runtime state ---
+*.db
+*.sqlite
+*.sqlite3
+*.sav
+*.log
+tmp/
+temp/
+.tmp/
+
+# --- Third-party datasets (regenerable from upstream; total ~42 GB,
+# blocks GitHub push if included). The migration_*.sql / migration_*.json
+# files at backend/data/ root ARE source-of-truth and stay tracked. ---
+backend/data/aihub/
+backend/data/knhanes/
+backend/data/training/
+# Another aihub Korean food image dataset (16 GB of .jpg + per-image
+# CSV/properties metadata). ml/inference/ and ml/training/ are kept.
+ml/data/
+
+# --- Pipeline runtime state + transient fixtures ---
+# Inbox is a receiving area for in-flight test files (1.8 GB of fixtures).
+backend/glasses_watcher/inbox/
+backend/glasses_watcher/temp_frames/
+backend/glasses_watcher/logs/
+backend/glasses_watcher/processed*.json
+
+# --- React Native HealthGlassesApp: re-include scaffolded launcher
+# icons + iOS asset-catalog manifests so a fresh clone builds. Scoped
+# narrowly to platform resource folders — images in src/, assets/, or
+# debug screenshots stay ignored by the parent *.png/*.jpg rules. ---
+!frontend/HealthGlassesApp/android/app/src/main/res/**/*.png
+!frontend/HealthGlassesApp/android/app/src/main/res/**/*.jpg
+!frontend/HealthGlassesApp/ios/**/*.png
+!frontend/HealthGlassesApp/ios/**/*.jpg
+!frontend/HealthGlassesApp/ios/**/Contents.json
+
+# --- Suspicious top-level junk (shell-redirect safety net) ---
+/=*

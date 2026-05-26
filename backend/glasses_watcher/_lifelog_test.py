@@ -30,6 +30,7 @@ import base64
 import json
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -216,9 +217,19 @@ GEMMA_MAX_FRAMES = 6  # Mac mini Gemma 4 E4B 500s on 8 real frames (vision-
                       # watcher runs at 6 for the same reason. Qwen and Llama 4
                       # via NIM still see all 8 — NIM has the headroom.
 
+# Mac mini's llama-server can host one Gemma inference at a time; two
+# concurrent requests crash the server (500 / disconnect) due to vision-
+# encoder contention. Serialize all Gemma calls process-wide. NIM-hosted
+# Qwen/Llama4 stay fully concurrent — only Gemma is gated.
+_GEMMA_LOCK = threading.Lock()
+
 def call_gemma_lifelog(frames: list, transcript_text: str = "",
                        max_tokens: int = 1500) -> tuple[Optional[dict], int, Optional[str]]:
-    """Send frames + transcript + LIFELOG_PROMPT to Gemma 4 E4B."""
+    """Send frames + transcript + LIFELOG_PROMPT to Gemma 4 E4B.
+
+    Serialized via _GEMMA_LOCK so concurrent chunks don't crash the
+    single-instance Mac mini llama-server.
+    """
     if not frames:
         return None, 0, "no_frames"
     # Evenly subsample down to GEMMA_MAX_FRAMES.
@@ -245,12 +256,13 @@ def call_gemma_lifelog(frames: list, transcript_text: str = "",
     }
     t0 = time.perf_counter()
     try:
-        with httpx.Client(timeout=GEMMA_TIMEOUT_SEC * 2) as client:
-            resp = client.post(f"{GEMMA_BASE_URL}/v1/chat/completions", json=body)
-            resp.raise_for_status()
-        data = resp.json()
-        text = data["choices"][0]["message"]["content"]
-        parsed = json.loads(text)
+        with _GEMMA_LOCK:
+            with httpx.Client(timeout=GEMMA_TIMEOUT_SEC * 2) as client:
+                resp = client.post(f"{GEMMA_BASE_URL}/v1/chat/completions", json=body)
+                resp.raise_for_status()
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"]
+            parsed = json.loads(text)
         ms = int((time.perf_counter() - t0) * 1000)
         return parsed, ms, None
     except Exception as e:
@@ -272,7 +284,7 @@ QWEN_TIMEOUT_SEC = 180
 QWEN_RETRIES = 1
 
 def call_qwen_lifelog(frames: list, transcript_text: str = "",
-                      max_tokens: int = 1500) -> tuple[Optional[dict], int, Optional[str]]:
+                      max_tokens: int = 3000) -> tuple[Optional[dict], int, Optional[str]]:
     """Send same payload to Qwen2.5-VL via NVIDIA NIM."""
     api_key = os.environ.get("NVIDIA_API_KEY")
     if not api_key:
@@ -357,7 +369,7 @@ LLAMA4_TIMEOUT_SEC = 120
 LLAMA4_RETRIES = 1
 
 def call_llama4_lifelog(frames: list, transcript_text: str = "",
-                        max_tokens: int = 1500) -> tuple[Optional[dict], int, Optional[str]]:
+                        max_tokens: int = 3000) -> tuple[Optional[dict], int, Optional[str]]:
     """Send same payload to Llama 4 Maverick via NVIDIA NIM."""
     api_key = os.environ.get("NVIDIA_API_KEY")
     if not api_key:
