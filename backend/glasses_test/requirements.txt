@@ -1,0 +1,15 @@
+# Glasses Pipeline Test Dependencies
+# ML Inference
+tflite-runtime==2.14.0; platform_machine != "aarch64"
+numpy>=1.24.0
+Pillow>=10.0.0
+opencv-python-headless>=4.8.0
+
+# Food DB lookup
+# (uses existing SQLite databases - no extra deps)
+
+# Supabase upload (reuses existing httpx from main app)
+httpx>=0.28.0
+
+# Utilities
+python-dotenv>=1.0.0

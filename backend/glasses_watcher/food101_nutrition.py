@@ -1,0 +1,125 @@
+"""Food-101 class -> hardcoded nutrition lookup.
+
+Sister table to event_processor.FOOD_DB / watcher._DISH_KCAL — same shape
+(per typical serving, not per 100 g). Used by the Tier-1 Food-101 CNN when
+the existing MFDS / USDA SQLite lookups don't have an entry for an
+international class name like 'beef_carpaccio' or 'creme_brulee'.
+
+Values are rough averages from public nutrition references (USDA, MyFitnessPal
+medians); accuracy target is 'right order of magnitude' so the dashboard's
+calorie totals stay sane until a proper USDA->Food-101 mapping is built.
+"""
+
+# kcal/protein_g/fat_g/carb_g per serving_g portion.
+FOOD101_NUTRITION: dict[str, dict] = {
+    "apple_pie":              {"kcal": 300, "protein_g": 2,  "fat_g": 14, "carb_g": 45, "serving_g": 120},
+    "baby_back_ribs":         {"kcal": 600, "protein_g": 35, "fat_g": 40, "carb_g": 15, "serving_g": 250},
+    "baklava":                {"kcal": 350, "protein_g": 4,  "fat_g": 20, "carb_g": 35, "serving_g": 80},
+    "beef_carpaccio":         {"kcal": 200, "protein_g": 22, "fat_g": 12, "carb_g": 0,  "serving_g": 100},
+    "beef_tartare":           {"kcal": 220, "protein_g": 22, "fat_g": 14, "carb_g": 2,  "serving_g": 120},
+    "beet_salad":             {"kcal": 90,  "protein_g": 2,  "fat_g": 4,  "carb_g": 12, "serving_g": 150},
+    "beignets":               {"kcal": 250, "protein_g": 3,  "fat_g": 12, "carb_g": 30, "serving_g": 80},
+    "bibimbap":               {"kcal": 550, "protein_g": 18, "fat_g": 12, "carb_g": 85, "serving_g": 400},
+    "bread_pudding":          {"kcal": 280, "protein_g": 6,  "fat_g": 10, "carb_g": 40, "serving_g": 150},
+    "breakfast_burrito":      {"kcal": 450, "protein_g": 18, "fat_g": 22, "carb_g": 40, "serving_g": 250},
+    "bruschetta":             {"kcal": 180, "protein_g": 4,  "fat_g": 8,  "carb_g": 22, "serving_g": 80},
+    "caesar_salad":           {"kcal": 350, "protein_g": 8,  "fat_g": 30, "carb_g": 12, "serving_g": 200},
+    "cannoli":                {"kcal": 250, "protein_g": 4,  "fat_g": 14, "carb_g": 28, "serving_g": 100},
+    "caprese_salad":          {"kcal": 200, "protein_g": 10, "fat_g": 16, "carb_g": 6,  "serving_g": 150},
+    "carrot_cake":            {"kcal": 380, "protein_g": 4,  "fat_g": 20, "carb_g": 45, "serving_g": 120},
+    "ceviche":                {"kcal": 150, "protein_g": 20, "fat_g": 4,  "carb_g": 8,  "serving_g": 180},
+    "cheese_plate":           {"kcal": 400, "protein_g": 22, "fat_g": 32, "carb_g": 8,  "serving_g": 150},
+    "cheesecake":             {"kcal": 320, "protein_g": 6,  "fat_g": 22, "carb_g": 26, "serving_g": 100},
+    "chicken_curry":          {"kcal": 400, "protein_g": 25, "fat_g": 18, "carb_g": 30, "serving_g": 300},
+    "chicken_quesadilla":     {"kcal": 500, "protein_g": 22, "fat_g": 26, "carb_g": 40, "serving_g": 250},
+    "chicken_wings":          {"kcal": 400, "protein_g": 28, "fat_g": 28, "carb_g": 5,  "serving_g": 150},
+    "chocolate_cake":         {"kcal": 380, "protein_g": 4,  "fat_g": 22, "carb_g": 45, "serving_g": 120},
+    "chocolate_mousse":       {"kcal": 300, "protein_g": 5,  "fat_g": 20, "carb_g": 28, "serving_g": 120},
+    "churros":                {"kcal": 280, "protein_g": 3,  "fat_g": 14, "carb_g": 35, "serving_g": 80},
+    "clam_chowder":           {"kcal": 200, "protein_g": 8,  "fat_g": 12, "carb_g": 15, "serving_g": 300},
+    "club_sandwich":          {"kcal": 600, "protein_g": 30, "fat_g": 30, "carb_g": 45, "serving_g": 250},
+    "crab_cakes":             {"kcal": 250, "protein_g": 14, "fat_g": 14, "carb_g": 12, "serving_g": 120},
+    "creme_brulee":           {"kcal": 350, "protein_g": 5,  "fat_g": 22, "carb_g": 30, "serving_g": 150},
+    "croque_madame":          {"kcal": 500, "protein_g": 22, "fat_g": 30, "carb_g": 35, "serving_g": 200},
+    "cup_cakes":              {"kcal": 280, "protein_g": 3,  "fat_g": 14, "carb_g": 35, "serving_g": 100},
+    "deviled_eggs":           {"kcal": 130, "protein_g": 6,  "fat_g": 10, "carb_g": 2,  "serving_g": 60},
+    "donuts":                 {"kcal": 250, "protein_g": 3,  "fat_g": 14, "carb_g": 28, "serving_g": 60},
+    "dumplings":              {"kcal": 350, "protein_g": 12, "fat_g": 12, "carb_g": 40, "serving_g": 200},
+    "edamame":                {"kcal": 120, "protein_g": 11, "fat_g": 5,  "carb_g": 9,  "serving_g": 100},
+    "eggs_benedict":          {"kcal": 450, "protein_g": 20, "fat_g": 30, "carb_g": 22, "serving_g": 200},
+    "escargots":              {"kcal": 180, "protein_g": 8,  "fat_g": 14, "carb_g": 4,  "serving_g": 100},
+    "falafel":                {"kcal": 330, "protein_g": 12, "fat_g": 18, "carb_g": 30, "serving_g": 150},
+    "filet_mignon":           {"kcal": 400, "protein_g": 40, "fat_g": 26, "carb_g": 0,  "serving_g": 180},
+    "fish_and_chips":         {"kcal": 700, "protein_g": 30, "fat_g": 35, "carb_g": 55, "serving_g": 350},
+    "foie_gras":              {"kcal": 460, "protein_g": 8,  "fat_g": 45, "carb_g": 4,  "serving_g": 100},
+    "french_fries":           {"kcal": 365, "protein_g": 4,  "fat_g": 17, "carb_g": 48, "serving_g": 117},
+    "french_onion_soup":      {"kcal": 250, "protein_g": 12, "fat_g": 14, "carb_g": 22, "serving_g": 300},
+    "french_toast":           {"kcal": 350, "protein_g": 12, "fat_g": 14, "carb_g": 40, "serving_g": 180},
+    "fried_calamari":         {"kcal": 350, "protein_g": 18, "fat_g": 20, "carb_g": 22, "serving_g": 150},
+    "fried_rice":             {"kcal": 450, "protein_g": 12, "fat_g": 14, "carb_g": 65, "serving_g": 300},
+    "frozen_yogurt":          {"kcal": 180, "protein_g": 4,  "fat_g": 3,  "carb_g": 35, "serving_g": 150},
+    "garlic_bread":           {"kcal": 220, "protein_g": 5,  "fat_g": 12, "carb_g": 22, "serving_g": 80},
+    "gnocchi":                {"kcal": 350, "protein_g": 9,  "fat_g": 8,  "carb_g": 55, "serving_g": 250},
+    "greek_salad":            {"kcal": 220, "protein_g": 6,  "fat_g": 16, "carb_g": 12, "serving_g": 200},
+    "grilled_cheese_sandwich": {"kcal": 400, "protein_g": 16, "fat_g": 22, "carb_g": 30, "serving_g": 150},
+    "grilled_salmon":         {"kcal": 350, "protein_g": 35, "fat_g": 22, "carb_g": 0,  "serving_g": 180},
+    "guacamole":              {"kcal": 180, "protein_g": 2,  "fat_g": 16, "carb_g": 8,  "serving_g": 100},
+    "gyoza":                  {"kcal": 280, "protein_g": 10, "fat_g": 10, "carb_g": 35, "serving_g": 180},
+    "hamburger":              {"kcal": 550, "protein_g": 25, "fat_g": 30, "carb_g": 45, "serving_g": 200},
+    "hot_and_sour_soup":      {"kcal": 130, "protein_g": 8,  "fat_g": 4,  "carb_g": 14, "serving_g": 300},
+    "hot_dog":                {"kcal": 350, "protein_g": 12, "fat_g": 22, "carb_g": 30, "serving_g": 150},
+    "huevos_rancheros":       {"kcal": 380, "protein_g": 18, "fat_g": 22, "carb_g": 26, "serving_g": 250},
+    "hummus":                 {"kcal": 220, "protein_g": 8,  "fat_g": 14, "carb_g": 16, "serving_g": 120},
+    "ice_cream":              {"kcal": 200, "protein_g": 3,  "fat_g": 11, "carb_g": 22, "serving_g": 100},
+    "lasagna":                {"kcal": 500, "protein_g": 22, "fat_g": 22, "carb_g": 55, "serving_g": 300},
+    "lobster_bisque":         {"kcal": 250, "protein_g": 14, "fat_g": 16, "carb_g": 14, "serving_g": 300},
+    "lobster_roll_sandwich":  {"kcal": 480, "protein_g": 22, "fat_g": 26, "carb_g": 35, "serving_g": 200},
+    "macaroni_and_cheese":    {"kcal": 400, "protein_g": 14, "fat_g": 18, "carb_g": 45, "serving_g": 250},
+    "macarons":               {"kcal": 80,  "protein_g": 1,  "fat_g": 4,  "carb_g": 10, "serving_g": 20},
+    "miso_soup":              {"kcal": 80,  "protein_g": 4,  "fat_g": 3,  "carb_g": 10, "serving_g": 250},
+    "mussels":                {"kcal": 220, "protein_g": 30, "fat_g": 6,  "carb_g": 12, "serving_g": 200},
+    "nachos":                 {"kcal": 480, "protein_g": 14, "fat_g": 26, "carb_g": 45, "serving_g": 250},
+    "omelette":               {"kcal": 280, "protein_g": 16, "fat_g": 22, "carb_g": 4,  "serving_g": 180},
+    "onion_rings":            {"kcal": 350, "protein_g": 4,  "fat_g": 18, "carb_g": 45, "serving_g": 120},
+    "oysters":                {"kcal": 100, "protein_g": 12, "fat_g": 2,  "carb_g": 6,  "serving_g": 150},
+    "pad_thai":               {"kcal": 500, "protein_g": 18, "fat_g": 22, "carb_g": 55, "serving_g": 300},
+    "paella":                 {"kcal": 480, "protein_g": 22, "fat_g": 14, "carb_g": 65, "serving_g": 350},
+    "pancakes":               {"kcal": 350, "protein_g": 8,  "fat_g": 14, "carb_g": 45, "serving_g": 200},
+    "panna_cotta":            {"kcal": 280, "protein_g": 4,  "fat_g": 22, "carb_g": 18, "serving_g": 150},
+    "peking_duck":            {"kcal": 500, "protein_g": 30, "fat_g": 30, "carb_g": 30, "serving_g": 250},
+    "pho":                    {"kcal": 350, "protein_g": 22, "fat_g": 8,  "carb_g": 45, "serving_g": 500},
+    "pizza":                  {"kcal": 300, "protein_g": 12, "fat_g": 12, "carb_g": 35, "serving_g": 150},
+    "pork_chop":              {"kcal": 400, "protein_g": 35, "fat_g": 26, "carb_g": 0,  "serving_g": 180},
+    "poutine":                {"kcal": 600, "protein_g": 14, "fat_g": 30, "carb_g": 65, "serving_g": 300},
+    "prime_rib":              {"kcal": 600, "protein_g": 45, "fat_g": 45, "carb_g": 0,  "serving_g": 250},
+    "pulled_pork_sandwich":   {"kcal": 550, "protein_g": 30, "fat_g": 22, "carb_g": 55, "serving_g": 250},
+    "ramen":                  {"kcal": 500, "protein_g": 14, "fat_g": 16, "carb_g": 65, "serving_g": 450},
+    "ravioli":                {"kcal": 380, "protein_g": 14, "fat_g": 14, "carb_g": 45, "serving_g": 250},
+    "red_velvet_cake":        {"kcal": 380, "protein_g": 4,  "fat_g": 22, "carb_g": 45, "serving_g": 120},
+    "risotto":                {"kcal": 400, "protein_g": 12, "fat_g": 14, "carb_g": 55, "serving_g": 300},
+    "samosa":                 {"kcal": 250, "protein_g": 5,  "fat_g": 14, "carb_g": 28, "serving_g": 100},
+    "sashimi":                {"kcal": 200, "protein_g": 30, "fat_g": 8,  "carb_g": 2,  "serving_g": 150},
+    "scallops":               {"kcal": 200, "protein_g": 22, "fat_g": 8,  "carb_g": 8,  "serving_g": 150},
+    "seaweed_salad":          {"kcal": 80,  "protein_g": 3,  "fat_g": 4,  "carb_g": 9,  "serving_g": 100},
+    "shrimp_and_grits":       {"kcal": 450, "protein_g": 22, "fat_g": 22, "carb_g": 35, "serving_g": 300},
+    "spaghetti_bolognese":    {"kcal": 500, "protein_g": 22, "fat_g": 16, "carb_g": 65, "serving_g": 300},
+    "spaghetti_carbonara":    {"kcal": 550, "protein_g": 22, "fat_g": 26, "carb_g": 55, "serving_g": 300},
+    "spring_rolls":           {"kcal": 250, "protein_g": 8,  "fat_g": 12, "carb_g": 30, "serving_g": 150},
+    "steak":                  {"kcal": 500, "protein_g": 45, "fat_g": 35, "carb_g": 0,  "serving_g": 200},
+    "strawberry_shortcake":   {"kcal": 320, "protein_g": 4,  "fat_g": 14, "carb_g": 45, "serving_g": 150},
+    "sushi":                  {"kcal": 350, "protein_g": 14, "fat_g": 4,  "carb_g": 65, "serving_g": 250},
+    "tacos":                  {"kcal": 350, "protein_g": 14, "fat_g": 16, "carb_g": 35, "serving_g": 200},
+    "takoyaki":               {"kcal": 280, "protein_g": 12, "fat_g": 12, "carb_g": 28, "serving_g": 180},
+    "tiramisu":               {"kcal": 300, "protein_g": 5,  "fat_g": 16, "carb_g": 30, "serving_g": 120},
+    "tuna_tartare":           {"kcal": 200, "protein_g": 22, "fat_g": 10, "carb_g": 4,  "serving_g": 120},
+    "waffles":                {"kcal": 350, "protein_g": 8,  "fat_g": 12, "carb_g": 52, "serving_g": 180},
+}
+
+assert len(FOOD101_NUTRITION) == 101, f"Expected 101 entries, got {len(FOOD101_NUTRITION)}"
+
+
+def lookup(class_name: str) -> dict | None:
+    """Return a copy of the nutrition row for a Food-101 class, or None.
+    Caller is expected to handle None by falling back to a generic estimate."""
+    row = FOOD101_NUTRITION.get(class_name.lower())
+    return dict(row) if row else None

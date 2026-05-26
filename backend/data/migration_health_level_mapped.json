@@ -1,0 +1,1 @@
+[{"hl_id": 1, "user_id": 2, "measured_at": "2026-04-13T05:34:32.431436+00:00", "period_type": "daily", "healthcare_index": 28.5, "dri": 12.3, "fatigue_level": 4, "stress_level": 3, "appetite_level": 7, "disease_risk_json": {"obesity": 8.2, "diabetes": 5.3, "cardiovascular": 3.1}, "predicted": false, "sim_scenario": null, "confidence_interval": null}]

@@ -1,0 +1,125 @@
+{
+  "model": "gemma-4-E2B-it",
+  "rows": [
+    {
+      "id": "apr24_morning_tea_exercise",
+      "gemma_t": 46.479789699893445,
+      "regex_t": 1.4012058996595442,
+      "gemma": {
+        "food_f1": 0.0,
+        "med_f1": 1.0,
+        "exercise_f1": 0.0
+      },
+      "regex": {
+        "food_f1": 0.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      }
+    },
+    {
+      "id": "apr22_voice_vitamin_d",
+      "gemma_t": 37.900649999734014,
+      "regex_t": 0.00040430016815662384,
+      "gemma": {
+        "food_f1": 1.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      },
+      "regex": {
+        "food_f1": 1.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      }
+    },
+    {
+      "id": "apr23_korean_food",
+      "gemma_t": 43.71129259979352,
+      "regex_t": 0.010180800221860409,
+      "gemma": {
+        "food_f1": 0.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      },
+      "regex": {
+        "food_f1": 0.6666666666666666,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      }
+    },
+    {
+      "id": "apr22_burger_water",
+      "gemma_t": 43.6265734997578,
+      "regex_t": 0.00011380016803741455,
+      "gemma": {
+        "food_f1": 0.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      },
+      "regex": {
+        "food_f1": 0.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      }
+    },
+    {
+      "id": "apr21_breakfast_omega3",
+      "gemma_t": 44.074420399963856,
+      "regex_t": 0.10534160025417805,
+      "gemma": {
+        "food_f1": 0.0,
+        "med_f1": 0.0,
+        "exercise_f1": 1.0
+      },
+      "regex": {
+        "food_f1": 0.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      }
+    },
+    {
+      "id": "apr20_exercise_stress",
+      "gemma_t": 44.33932489994913,
+      "regex_t": 0.0006963997147977352,
+      "gemma": {
+        "food_f1": 1.0,
+        "med_f1": 1.0,
+        "exercise_f1": 0.0
+      },
+      "regex": {
+        "food_f1": 1.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      }
+    },
+    {
+      "id": "apr19_multi_meal",
+      "gemma_t": 44.552230400033295,
+      "regex_t": 0.136393700260669,
+      "gemma": {
+        "food_f1": 0.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      },
+      "regex": {
+        "food_f1": 0.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      }
+    },
+    {
+      "id": "apr18_no_events",
+      "gemma_t": 39.746262499596924,
+      "regex_t": 6.660027429461479e-05,
+      "gemma": {
+        "food_f1": 1.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      },
+      "regex": {
+        "food_f1": 1.0,
+        "med_f1": 1.0,
+        "exercise_f1": 1.0
+      }
+    }
+  ]
+}
