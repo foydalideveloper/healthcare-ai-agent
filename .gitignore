@@ -135,5 +135,9 @@ backend/glasses_watcher/processed*.json
 !frontend/HealthGlassesApp/ios/**/*.jpg
 !frontend/HealthGlassesApp/ios/**/Contents.json
 
+# --- Dashboard icons (re-include the icons/ folder so a fresh clone
+# renders them without a separate file transfer). ---
+!frontend/hrt-dashboard/public/icons/**
+
 # --- Suspicious top-level junk (shell-redirect safety net) ---
 /=*
