@@ -775,6 +775,7 @@ def _try_parse_lifelog_json(text: str) -> tuple[Optional[dict], str]:
         start = m.end() - 1  # position of the opening [
         depth = 0
         end = -1
+        last_obj_end = -1  # index just after a top-level element closed at depth 1
         in_str = False
         esc = False
         for i in range(start, len(text)):
@@ -797,18 +798,90 @@ def _try_parse_lifelog_json(text: str) -> tuple[Optional[dict], str]:
                 if depth == 0:
                     end = i + 1
                     break
+            elif c == "}" and depth == 1:
+                last_obj_end = i + 1
+        # Pick the array text: full close if found, else (TRUNCATED output —
+        # the common Qwen/Llama4 failure when a verbose enumeration overruns
+        # max_tokens) salvage up to the last COMPLETE element and close it.
         if end > 0:
-            arr_text = text[start:end]
+            arr_text, mode = text[start:end], "events_only"
+        elif last_obj_end > 0:
+            arr_text, mode = text[start:last_obj_end] + "]", "events_truncated"
+        else:
+            # Truncated within the first/only object (Qwen repetition loop):
+            # balance-close open strings/brackets to recover its complete fields.
+            arr_text, mode = _close_truncated_array(text[start:]), "events_balanced"
+        if arr_text:
             arr_text = re.sub(r"\}(\s*)\{", r"},\1{", arr_text)
+            arr_text = re.sub(r",(\s*])", r"\1", arr_text)  # trailing comma
             try:
                 events = json.loads(arr_text)
-                if isinstance(events, list):
-                    return ({"events": events, "segment_summary": "",
-                             "dominant_activity": ""}, "events_only")
+                if isinstance(events, list) and events:
+                    result = {"events": events, "segment_summary": "",
+                              "dominant_activity": ""}
+                    enum = _salvage_enumerated_observations(text)
+                    if enum:
+                        result["enumerated_observations"] = enum
+                    return result, mode
             except json.JSONDecodeError:
                 pass
 
     return None, "failed"
+
+
+def _close_truncated_array(s: str) -> Optional[str]:
+    """Given text starting at an opening '[' that was truncated before closing,
+    balance-close open strings/brackets so json.loads can parse it. Recovers
+    the complete fields of a partially-emitted final object. Returns None if it
+    can't form anything plausible. The caller still json.loads-guards the
+    result, so a malformed close just falls through to 'failed'."""
+    if not s or s[0] != "[":
+        return None
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for c in s:
+        if esc:
+            esc = False
+            continue
+        if c == "\\":
+            esc = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c in "[{":
+            stack.append(c)
+        elif c in "]}":
+            if stack:
+                stack.pop()
+    res = s.rstrip()
+    if in_str:
+        res += '"'              # close the truncated string value
+    else:
+        # Drop a dangling separator / value-less key at the truncation point.
+        res = re.sub(r'(,|"[^"]*"\s*:)\s*$', "", res)
+    for b in reversed(stack):
+        res += "]" if b == "[" else "}"
+    return res
+
+
+def _salvage_enumerated_observations(text: str) -> list[str]:
+    """Best-effort recovery of the flat enumerated_observations string array
+    from a truncated response. It's the last/longest field in the schema, so
+    when an arm overruns max_tokens this array is what gets cut — grab every
+    complete quoted string up to the array close (or end of text if truncated).
+    """
+    m = re.search(r'"enumerated_observations"\s*:\s*\[', text)
+    if not m:
+        return []
+    sub = text[m.end():]
+    close = sub.find("]")
+    if close != -1:
+        sub = sub[:close]
+    return [s for s in re.findall(r'"((?:[^"\\]|\\.)*)"', sub) if s.strip()]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -820,8 +893,12 @@ QWEN_BASE_URL = "http://localhost:11434"  # Local Ollama
 # context). Using Q4_K_M (~19 GB) — Q8_0 (33 GB) OOM'd on the RTX 5090's 32 GB
 # VRAM once mmproj + KV cache were factored in. Q4 fits with ~13 GB headroom.
 QWEN_MODEL = "qwen3-vl:30b-a3b-instruct-q4_K_M"
-QWEN_TIMEOUT_SEC = 180
-QWEN_RETRIES = 1
+# Qwen3-VL Q4 is slow and inconsistent (130-180s when it returns; sometimes
+# longer). 300s single attempt + no retry beats 2x180s: gives a slow-but-valid
+# response time to finish so the truncation salvage can recover it, without
+# doubling wall-clock on a genuine hang.
+QWEN_TIMEOUT_SEC = 300
+QWEN_RETRIES = 0
 
 def call_qwen_lifelog(frames: list, transcript_text: str = "",
                       max_tokens: int = 15000,  # v3.2: room for enumerated_observations
@@ -847,6 +924,12 @@ def call_qwen_lifelog(frames: list, transcript_text: str = "",
         ],
         "temperature": 0,
         "max_tokens": max_tokens,
+        # Qwen3-VL Q4 is prone to degenerate repetition loops (observed: it
+        # repeated "...US dollar to X exchange rate" until it overran the token
+        # budget and truncated mid-string, breaking the JSON). Frequency +
+        # presence penalties break the loop so it emits complete, valid JSON.
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.3,
     }
     headers = {
         "Content-Type": "application/json",
@@ -897,10 +980,10 @@ LLAMA4_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
 # 17B active params — usually faster than Qwen 3.5 VLM 397B but still
 # NIM-hosted, so cold starts + queueing can spike. 120s is a safe cap.
 LLAMA4_TIMEOUT_SEC = 120
-LLAMA4_RETRIES = 1
+LLAMA4_RETRIES = 2  # NIM intermittently rejects concurrent requests; retry covers it
 
 def call_llama4_lifelog(frames: list, transcript_text: str = "",
-                        max_tokens: int = 18000,  # v3.2: room for enumerated_observations
+                        max_tokens: int = 8192,  # NIM Maverick caps completion tokens; 8192 is safe (Llama4 stays terse)
                         ocr_text: str = "",
                        value_updates: Optional[list] = None,
                        ocr_by_window: Optional[list[dict]] = None) -> tuple[Optional[dict], int, Optional[str]]:
@@ -955,6 +1038,21 @@ def call_llama4_lifelog(frames: list, transcript_text: str = "",
             ms = int((time.perf_counter() - t0) * 1000)
             note = None if mode == "clean" else f"json_recovered:{mode}"
             return parsed, ms, note
+        except httpx.HTTPStatusError as e:
+            sc = e.response.status_code
+            try:
+                body = e.response.text[:300]
+            except Exception:
+                body = ""
+            last_err = f"HTTP {sc}: {body}"
+            # NIM intermittently 5xx/400's on large multimodal requests (server
+            # side — an immediate retry hits the same failing instance), so back
+            # off longer to land on a healthy instance. Non-transient 4xx won't
+            # recover but the extra wait is bounded by LLAMA4_RETRIES.
+            if attempt < LLAMA4_RETRIES and sc in (400, 408, 409, 425, 429, 500, 502, 503, 504):
+                time.sleep(12)
+                continue
+            break
         except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError) as e:
             last_err = f"{type(e).__name__}: {str(e)[:160]}"
             if attempt < LLAMA4_RETRIES:
