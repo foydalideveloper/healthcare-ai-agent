@@ -42,31 +42,44 @@ async def lifelog_events(
         return {"events": [], "error": f"invalid date: {date!r}"}
 
     db = get_db_admin()
-    params = [
-        ("select", "lifelog_id,user_id,observed_at,duration_sec,category,"
-                   "description,people,people_count,location,indoor_outdoor,"
-                   "posture,mood,energy_signs,objects,screen,topic,decision,"
-                   "audio_heard,numbers_mentioned,kcal,amount_ml,source_model,"
-                   "source_video,chunk_idx,raw_event,"
-                   # v3 modality fields (migration 007)
-                   "video_extraction,audio_extraction,combined_analysis,"
-                   "ocr_text_full,recall_estimate,broadcast_mode,"
-                   # v3.1 OCR recall fields (migration 008)
-                   "frame_sampling_rate,panels_detected,value_updates,timeline,"
-                   # v3.2 detailed enumeration (migration 009)
-                   "enumerated_observations"),
-        ("user_id",      f"eq.{user_id}"),
-        ("observed_at",  f"gte.{kst_start.isoformat()}"),
-        ("observed_at",  f"lt.{kst_end.isoformat()}"),
-        ("order",        "observed_at.asc"),
-        ("limit",        str(limit)),
-    ]
-    if source_model:
-        params.append(("source_model", f"eq.{source_model}"))
-    if category:
-        params.append(("category", f"eq.{category}"))
+    # Base columns + v3/v3.1 fields (migrations 007/008, already applied).
+    base_select = (
+        "lifelog_id,user_id,observed_at,duration_sec,category,"
+        "description,people,people_count,location,indoor_outdoor,"
+        "posture,mood,energy_signs,objects,screen,topic,decision,"
+        "audio_heard,numbers_mentioned,kcal,amount_ml,source_model,"
+        "source_video,chunk_idx,raw_event,"
+        # v3 modality fields (migration 007)
+        "video_extraction,audio_extraction,combined_analysis,"
+        "ocr_text_full,recall_estimate,broadcast_mode,"
+        # v3.1 OCR recall fields (migration 008)
+        "frame_sampling_rate,panels_detected,value_updates,timeline"
+    )
+    # v3.2 columns (migration 009). Selected only opportunistically: if 009
+    # hasn't been applied yet, PostgREST 400s with code 42703 and we transparently
+    # retry with base_select — so the dashboard never goes blank during the
+    # migration window (this project repeatedly hits code-before-migration races).
+    optional_cols = ["enumerated_observations"]
 
-    resp = await db._client.get("/lifelog_event", params=params)
+    def _params(select_str: str):
+        p = [
+            ("select",       select_str),
+            ("user_id",      f"eq.{user_id}"),
+            ("observed_at",  f"gte.{kst_start.isoformat()}"),
+            ("observed_at",  f"lt.{kst_end.isoformat()}"),
+            ("order",        "observed_at.asc"),
+            ("limit",        str(limit)),
+        ]
+        if source_model:
+            p.append(("source_model", f"eq.{source_model}"))
+        if category:
+            p.append(("category", f"eq.{category}"))
+        return p
+
+    resp = await db._client.get(
+        "/lifelog_event", params=_params(base_select + "," + ",".join(optional_cols)))
+    if resp.status_code == 400 and "42703" in resp.text:
+        resp = await db._client.get("/lifelog_event", params=_params(base_select))
     resp.raise_for_status()
     rows = resp.json()
     if not isinstance(rows, list):
