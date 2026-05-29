@@ -648,17 +648,22 @@ GEMMA_MAX_FRAMES = 6  # Mac mini Gemma 4 E4B 500s on 8 real frames (vision-
 # concurrent requests crash the server (500 / disconnect) due to vision-
 # encoder contention. Serialize all Gemma calls process-wide. NIM-hosted
 # Qwen/Llama4 stay fully concurrent — only Gemma is gated.
-_GEMMA_LOCK = threading.Lock()
+# Shared by BOTH local Ollama arms (Gemma 4 + Qwen3-VL). They run on the same
+# single GPU at localhost:11434, so only one may infer at a time — otherwise
+# they contend and one stalls past its timeout (observed: Gemma timing out
+# while Qwen held the GPU under full 4-arm parallelism). Cloud arms (Llama4,
+# Gemini) are unaffected and still run fully in parallel with the local one.
+_LOCAL_OLLAMA_LOCK = threading.Lock()
 
 def call_gemma_lifelog(frames: list, transcript_text: str = "",
                        max_tokens: int = 12000,  # v3.2: room for enumerated_observations
                        ocr_text: str = "",
                        value_updates: Optional[list] = None,
                        ocr_by_window: Optional[list[dict]] = None) -> tuple[Optional[dict], int, Optional[str]]:
-    """Send frames + transcript + LIFELOG_PROMPT to Gemma 4 E4B.
+    """Send frames + transcript + LIFELOG_PROMPT to Gemma 4 (local Ollama).
 
-    Serialized via _GEMMA_LOCK so concurrent chunks don't crash the
-    single-instance Mac mini llama-server.
+    Serialized via _LOCAL_OLLAMA_LOCK — shared with Qwen3-VL so the two local
+    arms never infer simultaneously on the single GPU.
     """
     if not frames:
         return None, 0, "no_frames"
@@ -686,7 +691,7 @@ def call_gemma_lifelog(frames: list, transcript_text: str = "",
     }
     t0 = time.perf_counter()
     try:
-        with _GEMMA_LOCK:
+        with _LOCAL_OLLAMA_LOCK:
             with httpx.Client(timeout=GEMMA_TIMEOUT_SEC * 2) as client:
                 resp = client.post(f"{GEMMA_BASE_URL}/v1/chat/completions", json=body)
                 resp.raise_for_status()
@@ -938,10 +943,15 @@ def call_qwen_lifelog(frames: list, transcript_text: str = "",
     last_err: Optional[str] = None
     for attempt in range(QWEN_RETRIES + 1):
         try:
-            with httpx.Client(timeout=QWEN_TIMEOUT_SEC) as client:
-                resp = client.post(f"{QWEN_BASE_URL}/v1/chat/completions", headers=headers, json=body)
-                resp.raise_for_status()
-            data = resp.json()
+            # Serialize against Gemma on the shared GPU. Waiting on the lock is
+            # NOT bounded by QWEN_TIMEOUT_SEC (that only starts on the POST once
+            # acquired), so Qwen no longer times out merely because Gemma is
+            # mid-inference. Reported ms includes the wait (accurate wall-clock).
+            with _LOCAL_OLLAMA_LOCK:
+                with httpx.Client(timeout=QWEN_TIMEOUT_SEC) as client:
+                    resp = client.post(f"{QWEN_BASE_URL}/v1/chat/completions", headers=headers, json=body)
+                    resp.raise_for_status()
+                data = resp.json()
             text = data["choices"][0]["message"]["content"]
             parsed, mode = _try_parse_lifelog_json(text)
             if parsed is None:
