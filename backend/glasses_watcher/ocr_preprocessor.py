@@ -276,22 +276,44 @@ def detect_panels(text_boxes: list[dict],
     return panels
 
 
+def _upscale_factor_for(bw: int, bh: int) -> int:
+    """Adaptive ROI upscale (Recall Fix a). Smaller panels get more zoom so
+    tiny currency/ticker fonts (e.g. the Hana Bank board's 1,500.40 / 8,424.66)
+    become legible to PaddleOCR. Large panels stay at 2x (already readable).
+
+        panel >= 600x400          -> 2x  (current behaviour)
+        300x200 <= panel < 600x400 -> 3x
+        panel < 300x200            -> 4x
+    """
+    if bw >= 600 and bh >= 400:
+        return 2
+    if bw >= 300 and bh >= 200:
+        return 3
+    return 4
+
+
 def reocr_panel(model, img: "Image.Image",
                 bbox: tuple[int, int, int, int]) -> list[dict]:
-    """Crop the image to bbox, 2x upscale, OCR, translate boxes back to
-    the original frame's coordinate space."""
+    """Crop the image to bbox, adaptively upscale, OCR, translate boxes back
+    to the original frame's coordinate space. Upscale factor scales inversely
+    with panel size (see _upscale_factor_for); capped so the upscaled crop
+    width stays <= 4000px to bound GPU memory."""
     x1, y1, x2, y2 = bbox
     if x2 <= x1 or y2 <= y1:
         return []
     crop = img.crop((x1, y1, x2, y2))
     if crop.width < 8 or crop.height < 8:
         return []
-    up = crop.resize((crop.width * 2, crop.height * 2), Image.BICUBIC)
+    factor = _upscale_factor_for(x2 - x1, y2 - y1)
+    # Cap upscaled width at 4000px (INTER_CUBIC-equivalent BICUBIC resize).
+    factor = max(1, min(factor, 4000 // max(1, crop.width)))
+    up = (crop.resize((crop.width * factor, crop.height * factor), Image.BICUBIC)
+          if factor > 1 else crop)
     try:
         boxes = _run_paddleocr_once(model, up)
     except Exception:
         return []
-    # Translate: divide /2 to undo upscale, then add (x1, y1) offset
+    # Translate: divide by the actual factor to undo upscale, then add offset.
     out: list[dict] = []
     for b in boxes:
         bx1, by1, bx2, by2 = b["bbox"]
@@ -299,8 +321,8 @@ def reocr_panel(model, img: "Image.Image",
             "text": b["text"],
             "confidence": b["confidence"],
             "bbox": [
-                int(bx1 / 2) + x1, int(by1 / 2) + y1,
-                int(bx2 / 2) + x1, int(by2 / 2) + y1,
+                int(bx1 / factor) + x1, int(by1 / factor) + y1,
+                int(bx2 / factor) + x1, int(by2 / factor) + y1,
             ],
         })
     return out
@@ -526,10 +548,14 @@ def extract_text_from_frames(
         # native-resolution pass misses.
         panels: list[tuple[int, int, int, int]] = []
         panel_added = 0
+        panel_upscale_factors: list[int] = []
         if len(boxes) > 15:
             try:
                 panels = detect_panels(boxes, (img.height, img.width))
                 if len(panels) >= 2:
+                    panel_upscale_factors = [
+                        _upscale_factor_for(p[2] - p[0], p[3] - p[1]) for p in panels
+                    ]
                     existing_pairs = [(b["text"], (b["bbox"][1] + b["bbox"][3]) // 2) for b in boxes]
                     for p in panels:
                         extra = reocr_panel(model, img, p)
@@ -561,6 +587,7 @@ def extract_text_from_frames(
             "text_density": sum(len(b["text"]) for b in boxes),
             "panels_detected": panels,
             "panel_reocr_items_added": panel_added,
+            "panel_upscale_factors": panel_upscale_factors,
         }
         per_frame.append(entry)
         for b in boxes:
