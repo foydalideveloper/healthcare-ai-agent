@@ -63,6 +63,13 @@ except Exception as e:  # pragma: no cover - exercised on broken envs
     _import_err = f"{type(e).__name__}: {e}"
     print(f"[WARN] ocr_preprocessor: paddleocr/imagehash import failed - degrading to stub ({_import_err})")
 
+# cv2 is used only for the Speed Win #2 motion-skip; optional, degrades to
+# "never skip" if unavailable.
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
 
 # ── Module-scope singletons ────────────────────────────────────────────
 _OCR_MODEL = None
@@ -139,6 +146,21 @@ def _as_pil(frame: Any) -> Optional["Image.Image"]:
 
 def _phash(img: "Image.Image") -> str:
     return str(imagehash.phash(img))
+
+
+def _frames_too_similar(frame_a, frame_b, threshold: float = 0.03) -> bool:
+    """True if two same-size frames are >97% similar by mean abs pixel diff.
+
+    Speed Win #2: lets `extract_text_from_frames` skip a fresh OCR pass on a
+    near-duplicate of the last frame it actually OCR'd. Returns False on shape
+    mismatch or when cv2 is unavailable — i.e. never skip when uncertain.
+    """
+    if frame_a is None or frame_b is None or cv2 is None:
+        return False
+    if getattr(frame_a, "shape", None) != getattr(frame_b, "shape", None):
+        return False
+    diff = cv2.absdiff(frame_a, frame_b)
+    return float(diff.mean()) / 255.0 < threshold
 
 
 def _detect_broadcast(text_items: list[str]) -> bool:
@@ -388,6 +410,22 @@ def extract_text_from_frames(
     total_reocr_ms = 0.0
     frames_ocrd = 0
 
+    # Speed Win #2: motion-based frame skip. A frame >97% pixel-identical to
+    # the last frame we actually resolved reuses its boxes instead of a fresh
+    # OCR pass. Complements the exact-phash cache (which only catches byte-
+    # identical phashes — near-duplicates with scrolling tickers slip past it).
+    # At least 10 evenly-spaced frames are ALWAYS OCR'd so a small-panel value
+    # change (under the 3% whole-frame threshold) still gets sampled.
+    last_unique_arr = None
+    last_unique_entry = None
+    frames_skipped_by_motion = 0
+    # Always OCR at least every other frame within this call so a value that
+    # changes for >=1 frame is still sampled even if its whole-frame pixel
+    # delta falls under the 3% motion threshold. (extract_text_from_frames is
+    # called per ~10-frame group, so a fixed min-10 floor would force-OCR the
+    # whole group; an every-other floor leaves room for near-dupe skips.)
+    mandatory = {i for i in range(n) if i % 2 == 0}
+
     for i in range(n):
         img = _as_pil(frames[i])
         if img is None:
@@ -398,6 +436,29 @@ def extract_text_from_frames(
             continue
 
         t0 = time.perf_counter()
+
+        # Speed Win #2: motion skip (cheapest gate, runs before phash + OCR).
+        cur_arr = np.asarray(img)
+        if (i not in mandatory and last_unique_entry is not None
+                and _frames_too_similar(cur_arr, last_unique_arr)):
+            src = last_unique_entry
+            entry = {
+                "frame_idx": i, "timestamp_sec": float(timestamps[i]),
+                "text_boxes": list(src["text_boxes"]),
+                "broadcast_mode": src["broadcast_mode"],
+                "text_density": src["text_density"],
+                "panels_detected": list(src.get("panels_detected", [])),
+                "panel_reocr_items_added": src.get("panel_reocr_items_added", 0),
+            }
+            per_frame.append(entry)
+            for b in src["text_boxes"]:
+                seen_text.add(b["text"])
+            if src["broadcast_mode"]:
+                any_broadcast = True
+            frames_skipped_by_motion += 1
+            ms = int((time.perf_counter() - t0) * 1000)
+            print(f"[OK] OCR frame {i+1}/{n} {len(src['text_boxes'])} boxes (motion skip) {ms}ms")
+            continue
 
         # Dedup via phash — skip OCR if we've already processed an identical-
         # enough frame in this batch.
@@ -421,6 +482,10 @@ def extract_text_from_frames(
                 seen_text.add(b["text"])
             if cached["broadcast_mode"]:
                 any_broadcast = True
+            # A phash-cache hit still has valid boxes → use it as the motion
+            # baseline so later near-duplicates can skip against it too.
+            last_unique_arr = cur_arr
+            last_unique_entry = entry
             ms = int((time.perf_counter() - t0) * 1000)
             print(f"[OK] OCR frame {i+1}/{n} {len(cached['text_boxes'])} boxes (cache hit) {ms}ms")
             continue
@@ -504,6 +569,10 @@ def extract_text_from_frames(
         if ph:
             _PHASH_CACHE[ph] = entry
 
+        # Freshly-OCR'd frame becomes the motion baseline for Speed Win #2.
+        last_unique_arr = cur_arr
+        last_unique_entry = entry
+
         ms = int((time.perf_counter() - t0) * 1000)
         print(f"[OK] OCR frame {i+1}/{n} extracted {len(boxes)} text boxes in {ms}ms")
 
@@ -519,9 +588,10 @@ def extract_text_from_frames(
                 seen.add(t)
 
     elapsed = round(time.perf_counter() - t_start, 3)
-    if frames_ocrd:
+    if frames_ocrd or frames_skipped_by_motion:
         print(f"[SPEED] OCR primary {total_primary_ms/1000:.1f}s + reocr "
-              f"{total_reocr_ms/1000:.1f}s over {frames_ocrd} frame(s)")
+              f"{total_reocr_ms/1000:.1f}s over {frames_ocrd} frame(s); "
+              f"motion-skipped {frames_skipped_by_motion}")
     return {
         "ocr_full_text": "\n".join(ordered_text),
         "per_frame": per_frame,
@@ -531,6 +601,7 @@ def extract_text_from_frames(
         "ocr_mode": _OCR_MODE,
         "ocr_primary_sec": round(total_primary_ms / 1000, 3),
         "ocr_reocr_sec": round(total_reocr_ms / 1000, 3),
+        "frames_skipped_by_motion": frames_skipped_by_motion,
     }
 
 
