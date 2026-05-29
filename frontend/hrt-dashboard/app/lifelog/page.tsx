@@ -12,7 +12,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-const API_BASE = "http://localhost:8000/api/v1";
+const API_BASE = "http://localhost:8888/api/v1";
 
 interface LifelogRow {
   lifelog_id: number;
@@ -56,7 +56,74 @@ interface LifelogRow {
   cognitive_state?: Record<string, unknown> | string | null;
   anomalies?: unknown[] | null;
   agent_tasks?: unknown[] | null;
+  // ── v3 schema additions (migration 007). All optional; older rows leave
+  //    them null/undefined and the 3 modality panels render their empty state.
+  video_extraction?: VideoExtraction | null;
+  audio_extraction?: AudioExtraction | null;
+  combined_analysis?: CombinedAnalysis | null;
+  ocr_text_full?: string | null;
+  recall_estimate?: number | null;
+  broadcast_mode?: boolean | null;
+  // ── v3.1 schema additions (migration 008). Also optional.
+  frame_sampling_rate?: number | null;
+  panels_detected?: Array<[number, number, number, number]> | null;
+  value_updates?: ValueUpdate[] | null;
+  timeline?: TimelineWindow[] | null;
+  // ── v3.2 (migration 009): detailed per-item enumeration. One plain-English
+  //    sentence per captured item — rendered under Observed Facts.
+  enumerated_observations?: string[] | null;
 }
+
+// ── v3 modality types ───────────────────────────────────────────────
+type VideoExtraction = {
+  ocr_text_full?: string[];
+  visual_objects?: string[];
+  screen_content?: {
+    app_or_source?: string;
+    ui_elements?: string[];
+    charts?: string[];
+    headlines?: string[];
+  };
+  broadcast_mode?: boolean;
+  // v3.1 (migration 008)
+  panels_detected?: Array<[number, number, number, number]>;
+  frame_sampling_rate?: number;
+};
+
+type AudioExtraction = {
+  transcript_full?: string;
+  speaker_count_estimate?: number;
+  audio_events?: string[];
+  language_detected?: string;
+  audio_quality?: "good" | "partial" | "poor";
+};
+
+// v3.1 Fix 3 — metric value change record
+type ValueUpdate = {
+  label: string;
+  values: Array<{ value: string; frame_idx: number; timestamp_sec: number }>;
+  change_count: number;
+  first_seen_sec: number;
+  last_seen_sec: number;
+};
+
+// v3.1 Fix 4 — per-sub-window narrative entry
+type TimelineWindow = {
+  window_sec: string;
+  summary: string;
+  key_items: string[];
+};
+
+type CombinedAnalysis = {
+  what_is_happening?: string;
+  cross_modal_confidence?: number;
+  user_activity_inferred?: string;
+  importance_score?: number;
+  recall_estimate?: number;
+  // v3.1 (migration 008)
+  value_updates?: ValueUpdate[];
+  timeline?: TimelineWindow[];
+};
 
 // ── More Details panel helpers ───────────────────────────────────────
 // All styles use CSS variables from globals.css so the panel inherits
@@ -78,17 +145,6 @@ const detailsSectionTitleStyle: React.CSSProperties = {
   letterSpacing: 0.5,
   marginBottom: 4,
   marginTop: 12,
-};
-
-const detailsBadgeStyle: React.CSSProperties = {
-  display: "inline-block",
-  padding: "2px 6px",
-  border: "1px solid var(--border)",
-  borderRadius: 4,
-  background: "var(--background)",
-  color: "var(--text-primary)",
-  fontSize: 11,
-  marginRight: 6,
 };
 
 function renderInlineValue(v: unknown): string {
@@ -140,33 +196,550 @@ function ListBlock({ title, items }: { title: string; items: unknown[] }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// v2 More Details — financial-dashboard-style section renderers
+// ─────────────────────────────────────────────────────────────────────
+// Replaces the generic key/value dump for the four v2 sections
+// (screen_analysis, technical_analysis, macro, conversation_detail)
+// with custom components inspired by TradingView / Bloomberg / Linear.
+// Tailwind-only; no extra npm deps. Inline SVG icons.
+
+type Tone = "neutral" | "bull" | "bear" | "info" | "warn" | "action";
+
+const TONE_BG: Record<Tone, string> = {
+  neutral: "bg-slate-100 text-slate-700 border-slate-200",
+  bull:    "bg-emerald-50 text-emerald-700 border-emerald-200",
+  bear:    "bg-rose-50 text-rose-700 border-rose-200",
+  info:    "bg-blue-50 text-blue-700 border-blue-200",
+  warn:    "bg-amber-50 text-amber-700 border-amber-200",
+  action:  "bg-indigo-50 text-indigo-700 border-indigo-200",
+};
+
+const TONE_GRAD: Record<Tone, string> = {
+  neutral: "from-slate-50 to-slate-100",
+  bull:    "from-emerald-50 to-emerald-100",
+  bear:    "from-rose-50 to-rose-100",
+  info:    "from-blue-50 to-blue-100",
+  warn:    "from-amber-50 to-amber-100",
+  action:  "from-indigo-50 to-indigo-100",
+};
+
+const TONE_TEXT: Record<Tone, string> = {
+  neutral: "text-slate-700",
+  bull:    "text-emerald-700",
+  bear:    "text-rose-700",
+  info:    "text-blue-700",
+  warn:    "text-amber-700",
+  action:  "text-indigo-700",
+};
+
+const TONE_FILL: Record<Tone, string> = {
+  neutral: "bg-slate-400",
+  bull:    "bg-emerald-500",
+  bear:    "bg-rose-500",
+  info:    "bg-blue-500",
+  warn:    "bg-amber-500",
+  action:  "bg-indigo-500",
+};
+
+function asString(v: unknown): string { return v == null ? "" : String(v); }
+function asArray<T = unknown>(v: unknown): T[] { return Array.isArray(v) ? (v as T[]) : []; }
+function asNumber(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const m = v.match(/-?\d+(\.\d+)?/);
+    if (m) { const n = parseFloat(m[0]); return Number.isFinite(n) ? n : null; }
+  }
+  return null;
+}
+
+// Inline SVG icons — currentColor for stroke so they inherit tone.
+function Icon({ name, size = 14, className = "" }: { name: string; size?: number; className?: string }) {
+  const paths: Record<string, React.ReactNode> = {
+    monitor:   (<><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></>),
+    phone:     (<><rect x="6" y="2" width="12" height="20" rx="2"/><circle cx="12" cy="18" r="1"/></>),
+    chart:     (<><polyline points="3 17 9 11 13 15 21 7"/><polyline points="14 7 21 7 21 14"/></>),
+    globe:     (<><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></>),
+    message:   (<><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/></>),
+    arrowUp:   (<><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></>),
+    arrowDown: (<><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></>),
+    arrowRight:(<><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></>),
+    check:     (<><polyline points="20 6 9 17 4 12"/></>),
+    x:         (<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>),
+    alert:     (<><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="1"/></>),
+    copy:      (<><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>),
+    user:      (<><circle cx="12" cy="7" r="4"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></>),
+    activity:  (<><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></>),
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+         className={className} aria-hidden="true">
+      {paths[name] ?? null}
+    </svg>
+  );
+}
+
+function Pill({ children, tone = "neutral", icon, className = "" }:
+              { children: React.ReactNode; tone?: Tone; icon?: string; className?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-md border ${TONE_BG[tone]} ${className}`}>
+      {icon && <Icon name={icon} size={12} />}
+      <span>{children}</span>
+    </span>
+  );
+}
+
+function SectionCard({ title, icon, accent = "neutral", children }:
+                     { title: string; icon: string; accent?: Tone; children: React.ReactNode }) {
+  return (
+    <div className="mt-3 bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <div className={`px-3 py-2 flex items-center gap-2 border-b border-gray-100 bg-gradient-to-r ${TONE_GRAD[accent]}`}>
+        <span className={TONE_TEXT[accent]}><Icon name={icon} size={14} /></span>
+        <h4 className={`text-[11px] font-semibold tracking-wider uppercase ${TONE_TEXT[accent]}`}>{title}</h4>
+      </div>
+      <div className="p-3">{children}</div>
+    </div>
+  );
+}
+
+function TrendArrow({ direction, strength }: { direction: string; strength?: string }) {
+  const d = direction.toLowerCase();
+  const tone: Tone = (d.includes("up") || d.includes("bull")) ? "bull"
+                   : (d.includes("down") || d.includes("bear")) ? "bear" : "neutral";
+  const iconName = tone === "bull" ? "arrowUp" : tone === "bear" ? "arrowDown" : "arrowRight";
+  return (
+    <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r ${TONE_GRAD[tone]} border ${tone === "bull" ? "border-emerald-200" : tone === "bear" ? "border-rose-200" : "border-slate-200"}`}>
+      <span className={TONE_TEXT[tone]}><Icon name={iconName} size={20} /></span>
+      <div>
+        <div className={`text-xs font-bold uppercase tracking-wide ${TONE_TEXT[tone]}`}>{direction.replace(/_/g, " ")}</div>
+        {strength && <div className="text-[10px] text-gray-500 capitalize">{strength.replace(/_/g, " ")} strength</div>}
+      </div>
+    </div>
+  );
+}
+
+function Gauge({ value, levels, label }: { value: string; levels: string[]; label?: string }) {
+  const v = value.toLowerCase();
+  const idx = levels.findIndex(l => v.includes(l));
+  const reached = idx >= 0 ? idx + 1 : 0;
+  const colorFor = (i: number) => {
+    if (i >= reached) return "bg-gray-200";
+    const ratio = (i + 1) / levels.length;
+    if (ratio > 0.66) return "bg-emerald-500";
+    if (ratio > 0.33) return "bg-amber-400";
+    return "bg-slate-400";
+  };
+  return (
+    <div className="inline-flex flex-col gap-1">
+      {label && <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>}
+      <div className="flex items-center gap-1">
+        {levels.map((_, i) => (
+          <span key={i} className={`h-2 w-6 rounded-sm ${colorFor(i)}`} />
+        ))}
+        <span className="ml-2 text-xs font-medium text-gray-700 capitalize">{value.replace(/_/g, " ")}</span>
+      </div>
+    </div>
+  );
+}
+
+function ProgressBar({ value, label, tone = "info" }:
+                     { value: number; label?: string; tone?: Tone }) {
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <div className="space-y-1">
+      {label && (
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-gray-500 uppercase tracking-wider">{label}</span>
+          <span className="text-xs font-semibold text-gray-700">{pct.toFixed(0)}%</span>
+        </div>
+      )}
+      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div className={`h-full ${TONE_FILL[tone]} transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ScreenAnalysisSection({ data }: { data: Record<string, unknown> }) {
+  const app = asString(data.app_visible);
+  const device = asString(data.device_type).toLowerCase();
+  const text = asString(data.text_detected);
+  const ui = asArray<unknown>(data.ui_elements);
+  const charts = asArray<unknown>(data.charts_detected);
+  if (!app && !device && !text && ui.length === 0 && charts.length === 0) return null;
+  const deviceIcon = device.includes("phone") ? "phone" : "monitor";
+  return (
+    <SectionCard title="Screen Analysis" icon={deviceIcon} accent="info">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        {device && <Pill tone="neutral" icon={deviceIcon}>{device}</Pill>}
+        {app && <Pill tone="info">{app}</Pill>}
+        {charts.map((c, i) => <Pill key={`c${i}`} tone="info" icon="chart">{String(c)}</Pill>)}
+      </div>
+      {ui.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {ui.map((u, i) => (
+            <span key={i} className="inline-block px-2 py-0.5 text-[10px] rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+              {String(u)}
+            </span>
+          ))}
+        </div>
+      )}
+      {text && (
+        <pre className="font-mono text-[11px] bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap break-words text-gray-700 max-h-32 overflow-y-auto">{text}</pre>
+      )}
+    </SectionCard>
+  );
+}
+
+function TechnicalAnalysisSection({ data }: { data: Record<string, unknown> }) {
+  const trend = asString(data.trend);
+  const momentum = asString(data.momentum);
+  const strength = asString(data.trend_strength);
+  const patterns = asArray<unknown>(data.patterns);
+  const indicators = (data.indicators && typeof data.indicators === "object")
+    ? (data.indicators as Record<string, unknown>) : {};
+  const volume = asString(data.volume_confirmation);
+  const breakoutRaw = asNumber(data.breakout_probability);
+  const hasAnything = trend || momentum || strength || patterns.length
+    || Object.keys(indicators).length || volume || breakoutRaw != null;
+  if (!hasAnything) return null;
+  const vTone: Tone = /yes|true|confirm|strong/i.test(volume) ? "bull"
+    : /no|false|weak|absent/i.test(volume) ? "bear" : "neutral";
+  const breakoutPct = breakoutRaw == null ? null : (breakoutRaw <= 1 ? breakoutRaw * 100 : breakoutRaw);
+  return (
+    <SectionCard title="Technical Analysis" icon="chart" accent="bull">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="flex flex-col gap-2">
+          {trend && <TrendArrow direction={trend} strength={strength} />}
+          {momentum && <Gauge value={momentum} levels={["weak", "moderate", "strong"]} label="Momentum" />}
+          {volume && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-gray-500 uppercase tracking-wider text-[10px]">Volume</span>
+              <Pill tone={vTone} icon={vTone === "bull" ? "check" : vTone === "bear" ? "x" : "arrowRight"}>{volume}</Pill>
+            </div>
+          )}
+          {breakoutPct != null && (
+            <ProgressBar value={breakoutPct} label="Breakout probability" tone={breakoutPct >= 60 ? "bull" : "info"} />
+          )}
+        </div>
+        <div className="flex flex-col gap-3">
+          {patterns.length > 0 && (
+            <div>
+              <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Patterns</div>
+              <div className="flex flex-wrap gap-1">
+                {patterns.map((p, i) => <Pill key={i} tone="bull" icon="activity">{String(p)}</Pill>)}
+              </div>
+            </div>
+          )}
+          {Object.keys(indicators).length > 0 && (
+            <div>
+              <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Indicators</div>
+              <div className="grid grid-cols-2 gap-1">
+                {Object.entries(indicators).map(([k, v]) => {
+                  const s = typeof v === "string" || typeof v === "number" ? String(v) : JSON.stringify(v);
+                  const tone: Tone = /overbought|bear|sell/i.test(s) ? "bear"
+                    : /oversold|bull|buy/i.test(s) ? "bull" : "neutral";
+                  return (
+                    <div key={k} className={`px-2 py-1 rounded border ${TONE_BG[tone]}`}>
+                      <div className="text-[10px] uppercase tracking-wider opacity-70">{k}</div>
+                      <div className="text-xs font-semibold">{s}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
+function MacroSection({ data }: { data: Record<string, unknown> }) {
+  const regime = asString(data.market_regime);
+  const vol = asString(data.volatility_state);
+  const strength = asArray<unknown>(data.sector_strength);
+  const weakness = asArray<unknown>(data.sector_weakness);
+  const risks = asArray<unknown>(data.risk_factors);
+  const macros = asArray<unknown>(data.macro_factors);
+  if (!regime && !vol && !strength.length && !weakness.length && !risks.length && !macros.length) return null;
+  const regimeTone: Tone = /risk[_ ]?on|bull/i.test(regime) ? "bull"
+    : /risk[_ ]?off|bear/i.test(regime) ? "bear" : "neutral";
+  return (
+    <SectionCard title="Macro" icon="globe" accent="warn">
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        {regime && (
+          <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider border ${TONE_BG[regimeTone]}`}>
+            {regime.replace(/_/g, " ")}
+          </span>
+        )}
+        {vol && <Gauge value={vol} levels={["subdued", "normal", "elevated"]} label="Volatility" />}
+      </div>
+      {(strength.length > 0 || weakness.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          {strength.length > 0 && (
+            <div>
+              <div className="text-[10px] text-emerald-700 uppercase tracking-wider mb-1 flex items-center gap-1">
+                <Icon name="arrowUp" size={12}/> Sector strength
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {strength.map((s, i) => <Pill key={i} tone="bull" icon="arrowUp">{String(s)}</Pill>)}
+              </div>
+            </div>
+          )}
+          {weakness.length > 0 && (
+            <div>
+              <div className="text-[10px] text-rose-700 uppercase tracking-wider mb-1 flex items-center gap-1">
+                <Icon name="arrowDown" size={12}/> Sector weakness
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {weakness.map((s, i) => <Pill key={i} tone="bear" icon="arrowDown">{String(s)}</Pill>)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {risks.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[10px] text-amber-700 uppercase tracking-wider mb-1 flex items-center gap-1">
+            <Icon name="alert" size={12}/> Risk factors
+          </div>
+          <ul className="space-y-1">
+            {risks.map((r, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                <span className="text-amber-600 mt-0.5"><Icon name="alert" size={12}/></span>
+                <span>{String(r)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {macros.length > 0 && (
+        <div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Macro factors</div>
+          <ul className="space-y-1">
+            {macros.map((m, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                <span className="text-blue-500 mt-0.5"><Icon name="globe" size={12}/></span>
+                <span>{String(m)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+function ConversationDetailSection({ data }: { data: Record<string, unknown> }) {
+  const participants = asArray<unknown>(data.participants);
+  const keyPoints = asArray<unknown>(data.key_points);
+  const questions = asArray<unknown>(data.questions_asked);
+  const requests = asArray<unknown>(data.requests_received);
+  const agreements = asArray<unknown>(data.agreements);
+  const actions = asArray<unknown>(data.action_items);
+  if (!participants.length && !keyPoints.length && !questions.length
+      && !requests.length && !agreements.length && !actions.length) return null;
+  return (
+    <SectionCard title="Conversation" icon="message" accent="action">
+      {participants.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-3">
+          {participants.map((p, i) => <Pill key={i} tone="action" icon="user">{String(p)}</Pill>)}
+        </div>
+      )}
+      {keyPoints.length > 0 && (
+        <div className="mb-3">
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Key points</div>
+          <ol className="space-y-1">
+            {keyPoints.map((kp, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                <span className="text-violet-600 font-semibold w-5 flex-shrink-0">{i + 1}.</span>
+                <span>{String(kp)}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {questions.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[10px] text-blue-700 uppercase tracking-wider mb-1">Questions asked</div>
+          <ul className="space-y-1">
+            {questions.map((q, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs">
+                <span className="text-blue-500 mt-0.5 flex-shrink-0">?</span>
+                <span className="text-gray-700">{String(q)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {requests.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[10px] text-amber-700 uppercase tracking-wider mb-1">Requests received</div>
+          <ul className="space-y-1">
+            {requests.map((r, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs">
+                <span className="text-amber-600 mt-0.5 flex-shrink-0">→</span>
+                <span className="text-gray-700">{String(r)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {agreements.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[10px] text-emerald-700 uppercase tracking-wider mb-1">Agreements</div>
+          <ul className="space-y-1">
+            {agreements.map((a, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                <span className="text-emerald-600 mt-0.5 flex-shrink-0"><Icon name="check" size={14}/></span>
+                <span>{String(a)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {actions.length > 0 && (
+        <div>
+          <div className="text-[10px] text-indigo-700 uppercase tracking-wider mb-1">Action items</div>
+          <ul className="space-y-1">
+            {actions.map((a, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                <input type="checkbox" className="mt-0.5 h-3.5 w-3.5 rounded border-gray-300" aria-label={`mark action item ${i + 1} done`} />
+                <span>{String(a)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+function rowToMarkdown(row: LifelogRow): string {
+  const lines: string[] = [];
+  lines.push(`# ${row.category || "event"} @ ${row.observed_at}`);
+  lines.push("");
+  if (row.description) lines.push(row.description, "");
+  if (row.confidence != null) lines.push(`- confidence: ${(row.confidence * 100).toFixed(0)}%`);
+  if (row.importance != null) lines.push(`- importance: ${row.importance}`);
+  if (row.memory_relevance != null) lines.push(`- memory_relevance: ${row.memory_relevance}`);
+  if (row.attention_target) lines.push(`- attention: ${row.attention_target}${row.duration_sec ? ` · ${row.duration_sec}s` : ""}`);
+  const facts = row.observed_facts || [];
+  if (facts.length) { lines.push("", "## Observed facts"); facts.forEach(f => lines.push(`- ${f}`)); }
+  const ctx = row.inferred_context || [];
+  if (ctx.length) { lines.push("", "## Inferred context"); ctx.forEach(c => lines.push(`- ${c}`)); }
+  const dumpObj = (title: string, o: unknown) => {
+    if (!o || typeof o !== "object") return;
+    lines.push("", `## ${title}`, "```json", JSON.stringify(o, null, 2), "```");
+  };
+  dumpObj("Screen analysis", row.screen_analysis);
+  dumpObj("Technical analysis", row.technical_analysis);
+  dumpObj("Macro", row.macro);
+  dumpObj("Conversation detail", row.conversation_detail);
+  if (row.cognitive_state) dumpObj("Cognitive state", row.cognitive_state);
+  if (Array.isArray(row.anomalies) && row.anomalies.length) {
+    lines.push("", "## Anomalies"); row.anomalies.forEach(a => lines.push(`- ${String(a)}`));
+  }
+  if (Array.isArray(row.agent_tasks) && row.agent_tasks.length) {
+    lines.push("", "## Agent tasks"); row.agent_tasks.forEach(a => lines.push(`- ${typeof a === "string" ? a : JSON.stringify(a)}`));
+  }
+  return lines.join("\n");
+}
+
+function CopyMarkdownButton({ row }: { row: LifelogRow }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(rowToMarkdown(row)).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        }).catch(() => {});
+      }}
+      className="inline-flex items-center gap-1 px-2 py-1 text-[10px] text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded border border-gray-200 transition-colors"
+      title="Copy this event as Markdown"
+    >
+      <Icon name="copy" size={11} /> {copied ? "Copied" : "Copy as Markdown"}
+    </button>
+  );
+}
+
+// v3.2 — the "359 items problem" fix. The model now emits one plain-English
+// sentence per captured item in `enumerated_observations`; render them as a
+// scrollable, filterable list under Observed Facts so the user can SEE every
+// captured item (not just the 6-12 high-level bullets).
+function EnumeratedObservations({ items }: { items: string[] }) {
+  const [q, setQ] = useState("");
+  const clean = items.filter((s) => typeof s === "string" && s.trim().length > 0);
+  if (clean.length === 0) return null;
+  const needle = q.trim().toLowerCase();
+  const filtered = needle ? clean.filter((s) => s.toLowerCase().includes(needle)) : clean;
+  return (
+    <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+        <div style={{ ...detailsSectionTitleStyle, marginTop: 0 }}>
+          Detailed observations · {filtered.length === clean.length ? clean.length : `${filtered.length}/${clean.length}`} items
+        </div>
+        <input
+          type="text"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="filter…"
+          aria-label="filter detailed observations"
+          style={{
+            fontSize: 11, padding: "2px 8px", borderRadius: 6,
+            border: "1px solid var(--border)", background: "var(--surface)",
+            color: "var(--text-primary)", width: 140,
+          }}
+        />
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 16, maxHeight: 384, overflowY: "auto" }}>
+        {filtered.map((obs, i) => (
+          <li key={i} style={{ color: "var(--text-primary)", lineHeight: 1.5, marginBottom: 2 }}>
+            {obs}
+          </li>
+        ))}
+        {filtered.length === 0 && (
+          <li style={{ color: "var(--text-muted)", listStyle: "none", marginLeft: -16 }}>
+            no matches for “{q}”
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 function DetailsPanel({ row }: { row: LifelogRow }) {
   const facts = row.observed_facts || [];
   const context = row.inferred_context || [];
-  const hasBadges =
-    row.confidence != null || (row.importance != null && row.importance !== "") || row.memory_relevance != null;
   const hasAttention = (row.attention_target && row.attention_target !== "") || row.duration_sec != null;
 
   return (
     <div style={detailsPanelStyle}>
-      {hasBadges && (
-        <div>
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           {row.confidence != null && (
-            <span style={detailsBadgeStyle}>
-              confidence: {(row.confidence * 100).toFixed(0)}%
+            <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-md border bg-slate-100 text-slate-700 border-slate-200">
+              confidence&nbsp;<strong>{(row.confidence * 100).toFixed(0)}%</strong>
             </span>
           )}
-          {row.importance && (
-            <span style={detailsBadgeStyle}>importance: {String(row.importance)}</span>
+          {row.importance != null && row.importance !== "" && (
+            <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-md border bg-blue-50 text-blue-700 border-blue-200">
+              importance&nbsp;<strong>{String(row.importance)}</strong>
+            </span>
           )}
           {row.memory_relevance != null && (
-            <span style={detailsBadgeStyle}>memory: {String(row.memory_relevance)}</span>
+            <span className="inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-md border bg-violet-50 text-violet-700 border-violet-200">
+              memory&nbsp;<strong>{String(row.memory_relevance)}</strong>
+            </span>
           )}
         </div>
-      )}
-
+        <CopyMarkdownButton row={row} />
+      </div>
       {hasAttention && (
-        <div style={{ marginTop: hasBadges ? 8 : 0 }}>
+        <div className="mt-2 text-xs" style={{ color: "var(--text-secondary)" }}>
           {row.attention_target && (
             <span>
               <strong style={{ color: "var(--text-primary)" }}>Attention:</strong> {row.attention_target}
@@ -206,10 +779,14 @@ function DetailsPanel({ row }: { row: LifelogRow }) {
         </div>
       )}
 
-      {row.screen_analysis && <KeyValueBlock title="Screen analysis" data={row.screen_analysis} />}
-      {row.technical_analysis && <KeyValueBlock title="Technical analysis" data={row.technical_analysis} />}
-      {row.macro && <KeyValueBlock title="Macro" data={row.macro} />}
-      {row.conversation_detail && <KeyValueBlock title="Conversation detail" data={row.conversation_detail} />}
+      {Array.isArray(row.enumerated_observations) && row.enumerated_observations.length > 0 && (
+        <EnumeratedObservations items={row.enumerated_observations} />
+      )}
+
+      {row.screen_analysis && <ScreenAnalysisSection data={row.screen_analysis} />}
+      {row.technical_analysis && <TechnicalAnalysisSection data={row.technical_analysis} />}
+      {row.macro && <MacroSection data={row.macro} />}
+      {row.conversation_detail && <ConversationDetailSection data={row.conversation_detail} />}
       {row.cognitive_state != null && <KeyValueBlock title="Cognitive state" data={row.cognitive_state} />}
       {Array.isArray(row.anomalies) && row.anomalies.length > 0 && (
         <ListBlock title="Anomalies" items={row.anomalies} />
@@ -217,6 +794,369 @@ function DetailsPanel({ row }: { row: LifelogRow }) {
       {Array.isArray(row.agent_tasks) && row.agent_tasks.length > 0 && (
         <ListBlock title="Agent tasks" items={row.agent_tasks} />
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// v3 — modality-separated panels (Video / Audio / Combined)
+// ─────────────────────────────────────────────────────────────────────
+
+const panelEmptyStyle: React.CSSProperties = {
+  background: "var(--surface)",
+  borderTop: "1px solid var(--border)",
+  padding: 24,
+  textAlign: "center",
+  color: "var(--text-muted)",
+  fontSize: 12,
+};
+
+function PanelEmptyState({ modality }: { modality: "video" | "audio" | "combined" }) {
+  const msg = modality === "combined"
+    ? "No cross-modal synthesis available for this clip. The watcher may not have completed a v3 extraction pass yet."
+    : `No data extracted from this modality. This clip may have insufficient ${modality} input.`;
+  return (
+    <div style={panelEmptyStyle}>
+      <div style={{ maxWidth: 360, margin: "0 auto" }}>{msg}</div>
+    </div>
+  );
+}
+
+// Cached count helpers — used both inside panels and on the button badges.
+function videoBadgeCount(row: LifelogRow): number {
+  const v = row.video_extraction || undefined;
+  const ocrFromText = (row.ocr_text_full || "").split("\n").filter(Boolean).length;
+  const ocrFromArr  = v?.ocr_text_full?.length ?? 0;
+  const visObjs     = v?.visual_objects?.length ?? 0;
+  return Math.max(ocrFromText, ocrFromArr) + visObjs;
+}
+
+function audioBadgeCount(row: LifelogRow): number {
+  const a = row.audio_extraction || undefined;
+  const transcriptWords = (a?.transcript_full || "").split(/\s+/).filter(Boolean).length;
+  const events = a?.audio_events?.length ?? 0;
+  return Math.max(Math.floor(transcriptWords / 50), events);
+}
+
+function combinedBadgeMark(row: LifelogRow): string {
+  const r = row.combined_analysis?.recall_estimate ?? row.recall_estimate ?? null;
+  if (r == null) return "";
+  if (r > 0.7) return " ✓";
+  if (r < 0.4) return " ⚠";
+  return "";
+}
+
+function VideoPanel({ row }: { row: LifelogRow }) {
+  const v = row.video_extraction;
+  const ocrTextFlat = row.ocr_text_full || "";
+  const ocrItems = v?.ocr_text_full ?? (ocrTextFlat ? ocrTextFlat.split("\n").filter(Boolean) : []);
+  const visObjs  = v?.visual_objects ?? [];
+  const sc       = v?.screen_content ?? {};
+  const broadcast = (v?.broadcast_mode ?? row.broadcast_mode) === true;
+  const hasAny = ocrItems.length > 0 || visObjs.length > 0
+    || (sc.app_or_source || (sc.ui_elements?.length || 0) + (sc.charts?.length || 0) + (sc.headlines?.length || 0) > 0);
+  if (!hasAny) return <PanelEmptyState modality="video" />;
+  return (
+    <div className="border-t border-gray-100 bg-gray-50 p-3 space-y-3">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Visible on screen</div>
+
+      {ocrItems.length > 0 && (
+        <div>
+          <div className="text-[10px] text-blue-700 uppercase tracking-wider mb-1">
+            OCR Text · {ocrItems.length} item{ocrItems.length === 1 ? "" : "s"} (verbatim)
+          </div>
+          <pre className="font-mono text-[11px] bg-white border border-gray-200 rounded p-2 whitespace-pre-wrap break-words text-gray-700 max-h-48 overflow-y-auto">
+            {ocrItems.join("\n")}
+          </pre>
+        </div>
+      )}
+
+      {visObjs.length > 0 && (
+        <div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Visual objects</div>
+          <div className="flex flex-wrap gap-1">
+            {visObjs.map((o, i) => (
+              <span key={i} className="inline-block px-2 py-0.5 text-[11px] rounded-md border bg-slate-100 text-slate-700 border-slate-200">
+                {String(o)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {sc.app_or_source && (
+          <div className="bg-white border border-gray-200 rounded p-2">
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">App / source</div>
+            <div className="text-xs text-gray-800 font-medium">{sc.app_or_source}</div>
+          </div>
+        )}
+        {(sc.ui_elements?.length ?? 0) > 0 && (
+          <div className="bg-white border border-gray-200 rounded p-2">
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">UI elements</div>
+            <div className="flex flex-wrap gap-1">
+              {sc.ui_elements!.map((u, i) => (
+                <span key={i} className="inline-block px-1.5 py-0.5 text-[10px] rounded bg-gray-100 text-gray-600 border border-gray-200">
+                  {String(u)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {(sc.charts?.length ?? 0) > 0 && (
+          <div className="bg-white border border-gray-200 rounded p-2">
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Charts</div>
+            <div className="flex flex-wrap gap-1">
+              {sc.charts!.map((c, i) => (
+                <span key={i} className="inline-block px-1.5 py-0.5 text-[10px] rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  {String(c)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {(sc.headlines?.length ?? 0) > 0 && (
+          <div className="bg-white border border-gray-200 rounded p-2">
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Headlines</div>
+            <ul className="text-[11px] text-gray-800 space-y-0.5 list-disc list-inside">
+              {sc.headlines!.map((h, i) => (<li key={i}>{String(h)}</li>))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* v3.1 Fix 2: multi-panel detection */}
+      {(() => {
+        const panels = (v?.panels_detected ?? row.panels_detected) || [];
+        if (panels.length === 0) return null;
+        return (
+          <div>
+            <div className="text-[10px] text-blue-700 uppercase tracking-wider mb-1">
+              Multi-panel detection · {panels.length} region{panels.length === 1 ? "" : "s"}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {panels.slice(0, 12).map((p, i) => {
+                const [x1, y1, x2, y2] = p;
+                return (
+                  <span key={i}
+                        className="inline-block px-1.5 py-0.5 text-[10px] rounded bg-blue-50 text-blue-700 border border-blue-200 font-mono"
+                        title={`bbox: (${x1},${y1})-(${x2},${y2})`}>
+                    #{i + 1}: {x2 - x1}×{y2 - y1}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      <div className="flex items-center gap-3 text-[10px] text-gray-500 flex-wrap">
+        <span>Broadcast mode: <strong className={broadcast ? "text-emerald-700" : "text-gray-700"}>{broadcast ? "yes" : "no"}</strong></span>
+        <span>· OCR items: {ocrItems.length}</span>
+        <span>· Visual objects: {visObjs.length}</span>
+        {(() => {
+          const fsr = v?.frame_sampling_rate ?? row.frame_sampling_rate;
+          return fsr ? <span>· Frames sampled: <strong className="text-gray-700">{fsr}</strong></span> : null;
+        })()}
+      </div>
+    </div>
+  );
+}
+
+function AudioPanel({ row }: { row: LifelogRow }) {
+  const a = row.audio_extraction;
+  if (!a || (
+    !a.transcript_full
+    && !(a.audio_events?.length)
+    && !a.language_detected
+    && !a.audio_quality
+  )) return <PanelEmptyState modality="audio" />;
+  const quality = a.audio_quality ?? "—";
+  const qualityClass = quality === "good"
+    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+    : quality === "partial"
+      ? "bg-amber-50 text-amber-700 border-amber-200"
+      : quality === "poor"
+        ? "bg-rose-50 text-rose-700 border-rose-200"
+        : "bg-slate-100 text-slate-700 border-slate-200";
+  return (
+    <div className="border-t border-gray-100 bg-gray-50 p-3 space-y-3">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Heard in audio</div>
+
+      {a.transcript_full && (
+        <div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">
+            Transcript · {a.transcript_full.split(/\s+/).filter(Boolean).length} words
+          </div>
+          <div className="bg-white border border-gray-200 rounded p-2 text-xs text-gray-800 whitespace-pre-wrap max-h-48 overflow-y-auto">
+            {a.transcript_full}
+          </div>
+        </div>
+      )}
+
+      {(a.audio_events?.length ?? 0) > 0 && (
+        <div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Audio events</div>
+          <div className="flex flex-wrap gap-1">
+            {a.audio_events!.map((ev, i) => (
+              <span key={i} className="inline-block px-2 py-0.5 text-[11px] rounded-md border bg-violet-50 text-violet-700 border-violet-200">
+                {String(ev)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 text-[10px] text-gray-500 flex-wrap">
+        <span>
+          Quality:&nbsp;
+          <span className={`inline-block px-1.5 py-0.5 rounded border ${qualityClass}`}>
+            {quality}
+          </span>
+        </span>
+        {a.language_detected && (
+          <span>Language: <strong className="text-gray-700">{a.language_detected}</strong></span>
+        )}
+        {typeof a.speaker_count_estimate === "number" && (
+          <span>Speakers (est): <strong className="text-gray-700">{a.speaker_count_estimate}</strong></span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CombinedPanel({ row }: { row: LifelogRow }) {
+  const c = row.combined_analysis;
+  const recallTop = row.recall_estimate;
+  if (!c && recallTop == null) return <PanelEmptyState modality="combined" />;
+  const what = c?.what_is_happening ?? "";
+  const who  = c?.user_activity_inferred ?? "";
+  const conf = typeof c?.cross_modal_confidence === "number" ? c!.cross_modal_confidence : null;
+  const recall = typeof c?.recall_estimate === "number" ? c!.recall_estimate
+    : (typeof recallTop === "number" ? recallTop : null);
+  const importance = typeof c?.importance_score === "number" ? c!.importance_score : null;
+  const pct = (n: number) => `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+  const barFill = (n: number, good: boolean): string => {
+    const v = Math.max(0, Math.min(1, n));
+    if (good) {
+      if (v >= 0.7) return "bg-emerald-500";
+      if (v >= 0.4) return "bg-amber-500";
+      return "bg-rose-500";
+    }
+    if (v >= 0.7) return "bg-blue-500";
+    if (v >= 0.4) return "bg-slate-400";
+    return "bg-rose-500";
+  };
+  return (
+    <div className="border-t border-gray-100 bg-gray-50 p-3 space-y-3">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Synthesis</div>
+
+      {what && (
+        <div className="bg-white border border-gray-200 rounded p-3">
+          <div className="text-sm text-gray-900 font-medium">{what}</div>
+          {who && <div className="text-xs text-gray-600 mt-1">User activity: <span className="italic">{who}</span></div>}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {conf != null && (
+          <div className="bg-white border border-gray-200 rounded p-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-gray-500 uppercase tracking-wider">Cross-modal confidence</span>
+              <span className="text-xs font-semibold text-gray-700">{pct(conf)}</span>
+            </div>
+            <div className="h-2 bg-gray-200 rounded-full overflow-hidden mt-1">
+              <div className={`h-full ${barFill(conf, false)}`} style={{ width: pct(conf) }} />
+            </div>
+          </div>
+        )}
+        {recall != null && (
+          <div className="bg-white border border-gray-200 rounded p-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-gray-500 uppercase tracking-wider">Recall estimate</span>
+              <span className="text-xs font-semibold text-gray-700">{pct(recall)}</span>
+            </div>
+            <div className="h-2 bg-gray-200 rounded-full overflow-hidden mt-1">
+              <div className={`h-full ${barFill(recall, true)}`} style={{ width: pct(recall) }} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {importance != null && (
+        <div className="text-[10px] text-gray-500">
+          Importance score: <strong className="text-gray-700">{pct(importance)}</strong>
+        </div>
+      )}
+
+      {/* v3.1 Fix 3 — value updates across frames */}
+      {(() => {
+        const vu = (c?.value_updates ?? row.value_updates) || [];
+        if (vu.length === 0) return null;
+        return (
+          <div>
+            <div className="text-[10px] text-amber-700 uppercase tracking-wider mb-1">
+              Value updates · {vu.length}
+            </div>
+            <ul className="space-y-1">
+              {vu.slice(0, 20).map((u, i) => {
+                const first = u.values?.[0];
+                const last  = u.values?.[u.values.length - 1];
+                if (!first || !last) return null;
+                return (
+                  <li key={i} className="text-xs text-gray-800 bg-white border border-amber-200 rounded p-2 flex items-baseline gap-2 flex-wrap">
+                    <span className="text-amber-700">⚠</span>
+                    <strong>{u.label}</strong>
+                    <span className="font-mono">{first.value}</span>
+                    <span className="text-[10px] text-gray-500">({first.timestamp_sec}s)</span>
+                    <span className="text-gray-400">→</span>
+                    <span className="font-mono">{last.value}</span>
+                    <span className="text-[10px] text-gray-500">({last.timestamp_sec}s)</span>
+                    {u.change_count > 2 && (
+                      <span className="text-[10px] text-gray-500">· {u.change_count} updates</span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })()}
+
+      {/* v3.1 Fix 4 — timeline mini-table */}
+      {(() => {
+        const tl = (c?.timeline ?? row.timeline) || [];
+        if (tl.length === 0) return null;
+        return (
+          <div>
+            <div className="text-[10px] text-emerald-700 uppercase tracking-wider mb-1">
+              Timeline · {tl.length} window{tl.length === 1 ? "" : "s"}
+            </div>
+            <div className="bg-white border border-gray-200 rounded overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left px-2 py-1 text-[10px] text-gray-500 uppercase tracking-wider w-16">Window</th>
+                    <th className="text-left px-2 py-1 text-[10px] text-gray-500 uppercase tracking-wider">Summary</th>
+                    <th className="text-left px-2 py-1 text-[10px] text-gray-500 uppercase tracking-wider w-1/3">Key items</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tl.map((w, i) => (
+                    <tr key={i} className="border-t border-gray-100">
+                      <td className="px-2 py-1 font-mono text-emerald-700">{w.window_sec}s</td>
+                      <td className="px-2 py-1 text-gray-800">{w.summary || <span className="text-gray-400">—</span>}</td>
+                      <td className="px-2 py-1 text-gray-600">
+                        {(w.key_items || []).slice(0, 8).join(", ") || <span className="text-gray-400">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -266,13 +1206,35 @@ function CategoryIcon({ category, size = 28 }: { category: string | null; size?:
   return <span style={{ fontSize: size * 0.85, lineHeight: 1 }}>{emoji}</span>;
 }
 
+// Source-model tags come from _model_to_source_tag() — they encode the actual
+// model id. Both legacy hardcoded values and current dynamic values are listed
+// so historical rows still display correctly after the dynamic-tag migration.
 const SOURCE_BADGE: Record<string, { label: string; cls: string }> = {
-  gemma_4_e4b: { label: "Gemma 4", cls: "bg-blue-100 text-blue-700 border-blue-200" },
-  qwen_3_5_vlm: { label: "Qwen 3.5", cls: "bg-purple-100 text-purple-700 border-purple-200" },
-  llama_4_maverick: { label: "Llama 4", cls: "bg-emerald-100 text-emerald-700 border-emerald-200" },
-  gemini_2_5_pro: { label: "Gemini 2.5 Pro", cls: "bg-amber-100 text-amber-700 border-amber-200" },
-  merged: { label: "Merged", cls: "bg-gray-100 text-gray-700 border-gray-200" },
+  // ── Gemma 4 ──
+  gemma4_31b:             { label: "Gemma 4 31B", cls: "bg-blue-100 text-blue-700 border-blue-200" },
+  gemma4_26b_a4b_it_q8_0: { label: "Gemma 4 26B A4B", cls: "bg-blue-100 text-blue-700 border-blue-200" },
+  gemma_4_e4b:            { label: "Gemma 4 E4B", cls: "bg-blue-100 text-blue-700 border-blue-200" }, // legacy
+  // ── Qwen 3.5 VLM ──
+  qwen3_5_397b_a17b:      { label: "Qwen 3.5 VLM", cls: "bg-purple-100 text-purple-700 border-purple-200" },
+  qwen_3_5_vlm:           { label: "Qwen 3.5 VLM", cls: "bg-purple-100 text-purple-700 border-purple-200" }, // legacy
+  // ── Llama 4 Maverick ──
+  llama_4_maverick_17b_128e_inst: { label: "Llama 4 Maverick", cls: "bg-emerald-100 text-emerald-700 border-emerald-200" },
+  llama_4_maverick:               { label: "Llama 4 Maverick", cls: "bg-emerald-100 text-emerald-700 border-emerald-200" }, // legacy
+  // ── Gemini 2.5 Pro ──
+  gemini_2_5_pro:         { label: "Gemini 2.5 Pro", cls: "bg-amber-100 text-amber-700 border-amber-200" },
+  // ── Merged ──
+  merged:                 { label: "Merged", cls: "bg-gray-100 text-gray-700 border-gray-200" },
 };
+
+// Dropdown / askModel selectable tags — only the CURRENT dynamic tags
+// (legacy values still render via SOURCE_BADGE but you can't filter to them).
+const SELECTABLE_SOURCES = [
+  "gemma4_26b_a4b_it_q8_0",
+  "qwen3_5_397b_a17b",
+  "llama_4_maverick_17b_128e_inst",
+  "gemini_2_5_pro",
+] as const;
+type SelectableSource = typeof SELECTABLE_SOURCES[number];
 
 function fmtTime(iso: string): string {
   try {
@@ -294,18 +1256,25 @@ function fmtDate(iso: string): string {
 export default function LifelogPage() {
   const [userId, setUserId] = useState(1);
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
-  const [sourceFilter, setSourceFilter] = useState<"all" | "gemma_4_e4b" | "qwen_3_5_vlm" | "llama_4_maverick" | "gemini_2_5_pro">("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | SelectableSource>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [rows, setRows] = useState<LifelogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // "Ask about this clip" inline-panel state (per event)
-  const [askExpandedId, setAskExpandedId] = useState<number | null>(null);
-  // "More details" inline-panel state (per event, independent of Ask)
-  const [detailsExpandedId, setDetailsExpandedId] = useState<number | null>(null);
+  // Unified "which inline panel is open on which event" state — only ONE
+  // panel can be open at a time across the 5 possible kinds. Clicking a
+  // different button on the same event swaps the kind; clicking the same
+  // button again closes it.
+  type PanelKind = "ask" | "details" | "video" | "audio" | "combined";
+  const [openPanel, setOpenPanel] = useState<{ id: number; kind: PanelKind } | null>(null);
+  const togglePanel = (id: number, kind: PanelKind) => {
+    setOpenPanel(prev => (prev && prev.id === id && prev.kind === kind ? null : { id, kind }));
+  };
+  const isOpen = (id: number, kind: PanelKind) =>
+    openPanel != null && openPanel.id === id && openPanel.kind === kind;
   const [askQuestion, setAskQuestion] = useState("");
-  const [askModel, setAskModel] = useState<"gemma_4_e4b" | "qwen_3_5_vlm" | "llama_4_maverick">("llama_4_maverick");
+  const [askModel, setAskModel] = useState<SelectableSource>("llama_4_maverick_17b_128e_inst");
   const [askLoading, setAskLoading] = useState(false);
   const [askAnswer, setAskAnswer] = useState<{ answer: string; model: string; latency_ms: number; frames_used: number; transcript_excerpt: string } | null>(null);
   const [askError, setAskError] = useState<string | null>(null);
@@ -347,7 +1316,7 @@ export default function LifelogPage() {
     const d = sp.get("date");
     if (d) setDate(d);
     const src = sp.get("source");
-    if (src === "gemma_4_e4b" || src === "qwen_3_5_vlm" || src === "llama_4_maverick" || src === "gemini_2_5_pro") setSourceFilter(src);
+    if (src && (SELECTABLE_SOURCES as readonly string[]).includes(src)) setSourceFilter(src as SelectableSource);
     const cat = sp.get("category");
     if (cat) setCategoryFilter(cat);
   }, []);
@@ -379,7 +1348,7 @@ export default function LifelogPage() {
         setRows(Array.isArray(data.events) ? data.events : []);
       })
       .catch(e => {
-        setError(`Fetch failed: ${e?.message || String(e)}. Make sure FastAPI is running on :8000.`);
+        setError(`Fetch failed: ${e?.message || String(e)}. Make sure FastAPI is running on :8888.`);
         setRows([]);
       })
       .finally(() => setLoading(false));
@@ -464,10 +1433,9 @@ export default function LifelogPage() {
           <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value as any)}
             className="px-2 py-1 border border-gray-300 rounded text-xs">
             <option value="all">All sources</option>
-            <option value="gemma_4_e4b">Gemma 4 only</option>
-            <option value="qwen_3_5_vlm">Qwen 3.5 only</option>
-            <option value="llama_4_maverick">Llama 4 only</option>
-            <option value="gemini_2_5_pro">Gemini 2.5 Pro only</option>
+            {SELECTABLE_SOURCES.map(k => (
+              <option key={k} value={k}>{SOURCE_BADGE[k]?.label || k} only</option>
+            ))}
           </select>
         </div>
         <div className="flex items-center gap-2">
@@ -609,50 +1577,81 @@ export default function LifelogPage() {
                       {r.amount_ml ? `${r.amount_ml} ml` : ""}
                     </div>
                   )}
-                  <div className="mt-2 flex flex-wrap gap-3 items-center">
+                  <div className="mt-2 flex flex-wrap gap-2 items-center">
                     {r.source_video && (
                       <button
                         onClick={() => {
-                          if (askExpandedId === r.lifelog_id) {
-                            setAskExpandedId(null);
-                          } else {
-                            setAskExpandedId(r.lifelog_id);
-                            setAskQuestion("");
-                            setAskAnswer(null);
-                            setAskError(null);
-                          }
+                          const opening = !isOpen(r.lifelog_id, "ask");
+                          togglePanel(r.lifelog_id, "ask");
+                          if (opening) { setAskQuestion(""); setAskAnswer(null); setAskError(null); }
                         }}
-                        className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                        className={`text-xs px-2 py-1 rounded border transition-colors ${
+                          isOpen(r.lifelog_id, "ask")
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-blue-700 border-blue-200 hover:bg-blue-50"
+                        }`}
                       >
-                        {askExpandedId === r.lifelog_id ? "× Close" : "🔍 Ask about this clip"}
+                        {isOpen(r.lifelog_id, "ask") ? "× Close Ask" : "🔍 Ask about this clip"}
                       </button>
                     )}
                     <button
-                      onClick={() =>
-                        setDetailsExpandedId(detailsExpandedId === r.lifelog_id ? null : r.lifelog_id)
-                      }
-                      className="text-xs hover:underline"
-                      style={{ color: "var(--text-secondary)" }}
+                      onClick={() => togglePanel(r.lifelog_id, "details")}
+                      className={`text-xs px-2 py-1 rounded border transition-colors ${
+                        isOpen(r.lifelog_id, "details")
+                          ? "bg-gray-700 text-white border-gray-700"
+                          : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
+                      }`}
                     >
-                      {detailsExpandedId === r.lifelog_id ? "× Hide details" : "📋 More details"}
+                      {isOpen(r.lifelog_id, "details") ? "× Hide details" : "📋 More details"}
+                    </button>
+                    <button
+                      onClick={() => togglePanel(r.lifelog_id, "video")}
+                      className={`text-xs px-2 py-1 rounded border transition-colors ${
+                        isOpen(r.lifelog_id, "video")
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white text-blue-700 border-blue-200 hover:bg-blue-50"
+                      }`}
+                      title="Visible on screen — OCR + visual objects"
+                    >
+                      🎥 Video/Frames {videoBadgeCount(r) > 0 ? `(${videoBadgeCount(r)})` : ""}
+                    </button>
+                    <button
+                      onClick={() => togglePanel(r.lifelog_id, "audio")}
+                      className={`text-xs px-2 py-1 rounded border transition-colors ${
+                        isOpen(r.lifelog_id, "audio")
+                          ? "bg-violet-600 text-white border-violet-600"
+                          : "bg-white text-violet-700 border-violet-200 hover:bg-violet-50"
+                      }`}
+                      title="Heard in audio — transcript + audio events"
+                    >
+                      🎤 Audio {audioBadgeCount(r) > 0 ? `(${audioBadgeCount(r)})` : ""}
+                    </button>
+                    <button
+                      onClick={() => togglePanel(r.lifelog_id, "combined")}
+                      className={`text-xs px-2 py-1 rounded border transition-colors ${
+                        isOpen(r.lifelog_id, "combined")
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                      }`}
+                      title="Cross-modal synthesis"
+                    >
+                      🧠 Combined{combinedBadgeMark(r)}
                     </button>
                   </div>
                 </div>
               </div>
-              {detailsExpandedId === r.lifelog_id && <DetailsPanel row={r} />}
-              {askExpandedId === r.lifelog_id && r.source_video && (
+              {isOpen(r.lifelog_id, "details") && <DetailsPanel row={r} />}
+              {isOpen(r.lifelog_id, "video")    && <VideoPanel    row={r} />}
+              {isOpen(r.lifelog_id, "audio")    && <AudioPanel    row={r} />}
+              {isOpen(r.lifelog_id, "combined") && <CombinedPanel row={r} />}
+              {isOpen(r.lifelog_id, "ask") && r.source_video && (
                 <div className="border-t border-gray-100 bg-gray-50 p-3 space-y-2">
                   <div className="text-[10px] text-gray-500">
                     Re-analysing clip <code className="px-1 bg-white border border-gray-200 rounded">{r.source_video}</code> with the model below.
                     Frames + audio are re-sampled from the original file.
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {(["gemma_4_e4b", "qwen_3_5_vlm", "llama_4_maverick"] as const).map(k => {
-                      const labelMap: Record<string, string> = {
-                        gemma_4_e4b: "Gemma 4",
-                        qwen_3_5_vlm: "Qwen 3.5",
-                        llama_4_maverick: "Llama 4",
-                      };
+                    {SELECTABLE_SOURCES.map(k => {
                       const active = askModel === k;
                       return (
                         <button
@@ -664,7 +1663,7 @@ export default function LifelogPage() {
                               : "bg-white border-gray-300 text-gray-700 hover:bg-gray-100"
                           }`}
                         >
-                          {labelMap[k]}
+                          {SOURCE_BADGE[k]?.label || k}
                         </button>
                       );
                     })}

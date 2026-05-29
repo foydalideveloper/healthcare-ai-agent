@@ -47,7 +47,14 @@ async def lifelog_events(
                    "description,people,people_count,location,indoor_outdoor,"
                    "posture,mood,energy_signs,objects,screen,topic,decision,"
                    "audio_heard,numbers_mentioned,kcal,amount_ml,source_model,"
-                   "source_video,chunk_idx,raw_event"),
+                   "source_video,chunk_idx,raw_event,"
+                   # v3 modality fields (migration 007)
+                   "video_extraction,audio_extraction,combined_analysis,"
+                   "ocr_text_full,recall_estimate,broadcast_mode,"
+                   # v3.1 OCR recall fields (migration 008)
+                   "frame_sampling_rate,panels_detected,value_updates,timeline,"
+                   # v3.2 detailed enumeration (migration 009)
+                   "enumerated_observations"),
         ("user_id",      f"eq.{user_id}"),
         ("observed_at",  f"gte.{kst_start.isoformat()}"),
         ("observed_at",  f"lt.{kst_end.isoformat()}"),

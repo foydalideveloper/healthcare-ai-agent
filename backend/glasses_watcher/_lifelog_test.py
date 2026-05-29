@@ -351,7 +351,15 @@ Output ONLY valid JSON. Schema:
       {"window_sec": "30-45", "summary": "...", "key_items": [...]},
       {"window_sec": "45-60", "summary": "...", "key_items": [...]}
     ]
-  }
+  },
+
+  // ─── v3.2: DETAILED ENUMERATION (boss-facing — surfaces every captured item) ───
+  // A flat list of one-sentence plain-English facts, ONE per significant item.
+  // This is what the user reads in the dashboard. See the DETAILED ENUMERATION
+  // rule at the bottom of this prompt. Required (use [] only if truly nothing).
+  "enumerated_observations": [
+    "<one plain-English sentence per significant on-screen / audio item>"
+  ]
 }
 
 Rules:
@@ -416,6 +424,30 @@ Rules:
     * `combined_analysis.cross_modal_confidence` is high (>=0.8) when video
       and audio AGREE (e.g. anchor visible AND anchor speaking about NVDA),
       low (<=0.4) when they disagree or one is missing.
+- v3.2 DETAILED ENUMERATION (do NOT skip — this is what the user actually reads):
+    The user wants to SEE every significant captured item explained in plain
+    words, not compressed into a handful of bullets. Populate the top-level
+    `enumerated_observations` array with one-sentence natural-language facts —
+    ONE sentence per significant item: every number, ticker, percentage,
+    currency value, headline, label, and on-screen text item. In particular,
+    write a sentence for EVERY entry in the injected OCR ground-truth list
+    ("## On-screen text detected by OCR") that is meaningful.
+    Rules:
+      * One complete sentence per item. Simple English. Explain what it shows.
+      * Style references ONLY (do NOT copy verbatim — describe the real items):
+        - "Stock index KOSPI shows the value 8,228.70."
+        - "Samsung Electronics is priced at 307,000 won, up 8,000 won (+2.68%)."
+        - "The foreign-exchange board shows EUR/USD at 0.7161."
+        - "A headline reads 'SK Hynix joins the 1 trillion dollar club'."
+        - "A QR code is visible in the bottom-left of the screen."
+      * DO NOT summarize multiple items into one sentence.
+      * DO NOT skip items because they look repetitive.
+      * DO NOT use bullet characters — each entry is a plain sentence string.
+      * If an item is clearly OCR noise (single stray character, gibberish),
+        skip it silently rather than inventing meaning.
+      * Target between 80 and 250 sentences, depending on how much was captured.
+    `observed_facts` stays your SHORT high-level summary (6-12 bullets);
+    `enumerated_observations` is the LONG detailed list. BOTH are required.
 """
 
 
@@ -619,7 +651,7 @@ GEMMA_MAX_FRAMES = 6  # Mac mini Gemma 4 E4B 500s on 8 real frames (vision-
 _GEMMA_LOCK = threading.Lock()
 
 def call_gemma_lifelog(frames: list, transcript_text: str = "",
-                       max_tokens: int = 8000,
+                       max_tokens: int = 12000,  # v3.2: room for enumerated_observations
                        ocr_text: str = "",
                        value_updates: Optional[list] = None,
                        ocr_by_window: Optional[list[dict]] = None) -> tuple[Optional[dict], int, Optional[str]]:
@@ -792,7 +824,7 @@ QWEN_TIMEOUT_SEC = 180
 QWEN_RETRIES = 1
 
 def call_qwen_lifelog(frames: list, transcript_text: str = "",
-                      max_tokens: int = 10000,
+                      max_tokens: int = 15000,  # v3.2: room for enumerated_observations
                       ocr_text: str = "",
                       value_updates: Optional[list] = None,
                       ocr_by_window: Optional[list[dict]] = None) -> tuple[Optional[dict], int, Optional[str]]:
@@ -868,7 +900,7 @@ LLAMA4_TIMEOUT_SEC = 120
 LLAMA4_RETRIES = 1
 
 def call_llama4_lifelog(frames: list, transcript_text: str = "",
-                        max_tokens: int = 12000,
+                        max_tokens: int = 18000,  # v3.2: room for enumerated_observations
                         ocr_text: str = "",
                        value_updates: Optional[list] = None,
                        ocr_by_window: Optional[list[dict]] = None) -> tuple[Optional[dict], int, Optional[str]]:
@@ -961,7 +993,7 @@ def _gemini_config() -> tuple[Optional[str], str]:
 
 
 def call_gemini_lifelog(frames: list, transcript_text: str = "",
-                        max_tokens: int = 12000,
+                        max_tokens: int = 20000,  # v3.2: room for enumerated_observations
                         ocr_text: str = "",
                        value_updates: Optional[list] = None,
                        ocr_by_window: Optional[list[dict]] = None) -> tuple[Optional[dict], int, Optional[str]]:
@@ -1108,6 +1140,9 @@ def write_events_to_supabase(events: list, source_model: str, source_video: str,
         ocr_full    = ev.pop("_ocr_text_full", None)
         broadcast   = ev.pop("_broadcast_mode", False)
         fs_rate     = ev.pop("_frame_sampling_rate", None)
+        enumerated  = ev.pop("_enumerated_observations", None)
+        if not isinstance(enumerated, list):
+            enumerated = []
 
         try:
             recall = float(v3_combined.get("recall_estimate")) if isinstance(v3_combined, dict) else None
@@ -1148,6 +1183,8 @@ def write_events_to_supabase(events: list, source_model: str, source_video: str,
             "broadcast_mode":    broadcast,
             # v3.1 columns (migration 008) — also NULL-able.
             "frame_sampling_rate": _maybe_int(fs_rate),
+            # v3.2 column (migration 009) — detailed per-item enumeration.
+            "enumerated_observations": enumerated,
         }
         rows.append(row)
 
@@ -1439,6 +1476,10 @@ def _process_chunk(i: int, video_path: Path, chunk_sec: int, duration: float,
         v3_video    = parsed.get("video_extraction")    if isinstance(parsed, dict) else None
         v3_audio    = parsed.get("audio_extraction")    if isinstance(parsed, dict) else None
         v3_combined = parsed.get("combined_analysis")   if isinstance(parsed, dict) else None
+        # v3.2: detailed enumeration (defensive — coerce non-list to []).
+        v3_enumerated = parsed.get("enumerated_observations") if isinstance(parsed, dict) else None
+        if not isinstance(v3_enumerated, list):
+            v3_enumerated = []
         # Fix 1: override frame_sampling_rate with the actual value we used
         # for OCR (truth, not what the VLM guessed). Stored both inside the
         # video_extraction JSONB and as a top-level row column.
@@ -1475,6 +1516,7 @@ def _process_chunk(i: int, video_path: Path, chunk_sec: int, duration: float,
             ev["_video_extraction"]    = v3_video
             ev["_audio_extraction"]    = v3_audio
             ev["_combined_analysis"]   = v3_combined
+            ev["_enumerated_observations"] = v3_enumerated
             ev["_ocr_text_full"]       = ocr_full
             ev["_broadcast_mode"]      = ocr_bcast
             ev["_frame_sampling_rate"] = frame_sampling_rate
