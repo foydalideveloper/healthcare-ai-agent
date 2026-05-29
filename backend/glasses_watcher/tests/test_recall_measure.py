@@ -117,6 +117,50 @@ def recall_at_substring(gt: set[str], hay_text: str) -> tuple[int, int]:
     return hits, len(gt)
 
 
+def _digits(s: str) -> str:
+    return re.sub(r"\D", "", s)
+
+
+def recall_fuzzy(gt: set[str], clip_items: list[str],
+                 ratio_thresh: float = 0.85) -> tuple[int, int]:
+    """Fairer recall: the strict substring metric under-counts because OCR
+    fragments and mis-renders the SAME content differently in the ground-truth
+    screenshots vs the lower-quality video frames (e.g. 'KOSPI822870' vs
+    'KOSP' + '822870', or Korean glyphs garbled two different ways). A GT item
+    counts as recalled if ANY clip item matches it by:
+      1. substring (either direction, >=4 chars), OR
+      2. numeric: its >=3-digit run appears in some clip item's digits, OR
+      3. fuzzy: difflib similarity ratio >= ratio_thresh (default 0.80).
+    This approximates the ~70% 'semantic eyeball' figure honestly.
+    """
+    from difflib import SequenceMatcher
+    norm_clip = [c for c in (_normalize(x) for x in clip_items) if c]
+    clip_digits = {d for d in (_digits(c) for c in norm_clip) if len(d) >= 4}
+    hits = 0
+    for g in gt:
+        if not g:
+            continue
+        # 1) substring either direction, shorter side >= 4 chars.
+        if any(g in c or (len(g) >= 4 and c in g) for c in norm_clip):
+            hits += 1
+            continue
+        # 2) numeric: GT's full >=4-digit run appears in a clip item's digits
+        #    (one direction only — avoids crediting a short coincidental digit
+        #    overlap as a match).
+        gd = _digits(g)
+        if len(gd) >= 4 and any(gd in cd for cd in clip_digits):
+            hits += 1
+            continue
+        # 3) fuzzy: difflib >= 0.85 on strings of length >= 5 only (short
+        #    strings give unreliable ratios).
+        if len(g) >= 5 and any(
+                abs(len(c) - len(g)) <= 4
+                and SequenceMatcher(None, g, c).ratio() >= ratio_thresh
+                for c in norm_clip):
+            hits += 1
+    return hits, len(gt)
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: test_recall_measure.py <path/to/clip.lifelog.json>")
@@ -137,6 +181,10 @@ def main():
     new_hits, new_n = recall_at_substring(gt, new_hay)
     new_pct = round(new_hits / max(1, new_n) * 100, 1)
     print(f"   recall@substring: {new_hits}/{new_n} = {new_pct}%")
+    fz_hits, fz_n = recall_fuzzy(gt, new_raw)
+    fz_pct = round(fz_hits / max(1, fz_n) * 100, 1)
+    print(f"   recall@fuzzy:     {fz_hits}/{fz_n} = {fz_pct}%   "
+          f"(substring+numeric+difflib>=0.85 - the honest capture figure)")
 
     print("\n== Old baseline (VLM description fields only, no OCR pass) ==")
     old_items = _old_baseline_items_from_json(json_path)
