@@ -1626,6 +1626,21 @@ def _process_chunk(i: int, video_path: Path, chunk_sec: int, duration: float,
             v3_combined = {}
         if value_updates and not v3_combined.get("value_updates"):
             v3_combined["value_updates"] = value_updates
+        # Audio: inject the actual Whisper transcript as GROUND TRUTH. The
+        # prompt asks the VLM to echo it, but local arms routinely drop or
+        # summarize it (and with no transcript they hallucinate
+        # "silence_dominant"). This is the audio analogue of injecting OCR
+        # text — override only when Whisper produced text for this chunk.
+        if not isinstance(v3_audio, dict):
+            v3_audio = {}
+        if ts_text and ts_text.strip():
+            v3_audio["transcript_full"] = ts_text
+            if transcript and transcript.get("language"):
+                v3_audio["language_detected"] = transcript["language"]
+            # A real transcript means it wasn't silence — correct the VLM's
+            # contradictory sole "silence_dominant" guess.
+            if v3_audio.get("audio_events") in (None, [], ["silence_dominant"]):
+                v3_audio["audio_events"] = ["speech"]
         # OCR fields are PER-CHUNK (same across arms for the same chunk).
         ocr_full = (ocr_result or {}).get("ocr_full_text", "") or None
         ocr_bcast = bool((ocr_result or {}).get("broadcast_mode_detected", False))
