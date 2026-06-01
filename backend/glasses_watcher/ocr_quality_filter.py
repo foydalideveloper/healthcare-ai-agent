@@ -47,8 +47,12 @@ OCR_GARBAGE_PATTERNS = [
     re.compile(r"^[A-Za-z][가-힣]"),     # Latin+Korean in one short token
 ]
 
-_REPEAT_RUN = re.compile(r"(.)\1\1")        # 3+ identical consecutive chars
 _ALL_CAPS_LATIN = re.compile(r"[A-Z]+")     # used with fullmatch
+# 3+ identical letters / Hangul / punctuation in a row = OCR garble. Digits are
+# deliberately EXCLUDED so real numbers (e.g. 111000) survive.
+_GARBLE_RUN = re.compile(r"([A-Za-z가-힣!|~?.\-])\1\1")
+# A "clean" number / price token: digits + numeric punctuation only.
+_CLEAN_NUMERIC = re.compile(r"[\d.,%+\-/:()]+")
 
 
 def is_mojibake(text: str) -> bool:
@@ -88,18 +92,32 @@ def is_meaningful_ocr_item(text: str, confidence: float = 1.0) -> bool:
     if text in KOREAN_PARTICLES:
         return False
 
-    # Always-keep: factual content.
+    # Garble runs (3+ same letter/Hangul/punct) — checked BEFORE the digit rule
+    # so "19!!! III!!" / "H5!!!" / "LLLVA" are dropped despite containing a digit.
+    if _GARBLE_RUN.search(text):
+        return False
+    # Short tokens peppered with OCR-artifact punctuation ("Hs!:", "!II1", "10!1").
+    if len(text) < 6 and re.search(r"[!|]", text):
+        return False
+
+    # Numbers / prices: keep a CLEAN numeric token or a digit-DOMINANT one; drop a
+    # digit buried in garbage (low digit ratio, no currency/entity).
     if re.search(r"\d", text):
-        return True
+        if _CLEAN_NUMERIC.fullmatch(text):
+            return True
+        if re.search(r"[$€¥₩%]", text) or _entity_match(text):
+            return True
+        digit_ratio = sum(c.isdigit() for c in text) / len(text)
+        return digit_ratio >= 0.4
+
+    # Currency / change symbols, then recognized entities → keep.
     if re.search(r"[$€¥₩%+▲▼]", text):
         return True
     if _entity_match(text):
         return True
 
-    # Now the "maybe garbage" non-keepers (token has no digit/symbol/entity):
-    if _REPEAT_RUN.search(text):                       # "LLLVA", "III"
-        return False
-    if _case_transitions(text) >= 3:                   # "WiHdoWs"
+    # Remaining non-digit "maybe garbage" non-keepers:
+    if _case_transitions(text) >= 3:                        # "WiHdoWs"
         return False
     if len(text) >= 6 and _ALL_CAPS_LATIN.fullmatch(text):  # "EXAHANUGE" (non-entity)
         return False

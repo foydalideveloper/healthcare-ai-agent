@@ -16,11 +16,25 @@ never crash. Korean text is preserved verbatim (callers serialize as UTF-8).
 from __future__ import annotations
 
 import re
+import sys
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "v3.2"
+# The quality filter lives in backend/glasses_watcher/ (this file is in
+# backend/app/services/). It's pure (only `re`) — importing it does NOT pull in
+# paddle/torch. parents[2] == .../backend; glasses_watcher resolves as a
+# namespace package from there.
+_BACKEND = Path(__file__).resolve().parents[2]
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+from glasses_watcher.ocr_quality_filter import (  # noqa: E402
+    filter_ocr_items,
+    filter_enumerated_observations,
+)
+
+SCHEMA_VERSION = "v3.3"
 _QUALITY_RANK = {"poor": 0, "partial": 1, "good": 2}  # for "worst quality"
 
 
@@ -212,7 +226,9 @@ def _empty_report(generated_at: str | None = None) -> dict:
         "video_date": "", "video_time_range": {"start_sec": 0, "end_sec": 0},
         "duration_sec": 0,
         "overview": "", "topics_covered": [],
-        "all_observed_facts": [], "all_enumerated_observations": [], "all_ocr_text": [],
+        "all_observed_facts": [], "all_enumerated_observations": [],
+        "enumerated_dropped_count": 0,
+        "all_ocr_text": [], "ocr_appendix_full": [],
         "audio_transcript_full": "", "audio_quality": "", "audio_events": [],
         "language_detected": "",
         "timeline": [], "value_updates": [],
@@ -223,6 +239,8 @@ def _empty_report(generated_at: str | None = None) -> dict:
         "metrics": {
             "total_ocr_items_captured": 0, "total_enumerated_observations": 0,
             "recall_estimate_avg": 0.0, "frame_sampling_rate_used": 0,
+            "meaningful_ocr_items": 0, "filtered_ocr_items": 0,
+            "meaningful_observations": 0, "filtered_observations": 0,
         },
         "metadata": {
             "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
@@ -323,6 +341,14 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
         if n is not None:
             fsr.append(n)
 
+    # === v3.3 quality filter pass ===
+    # all_ocr_text becomes the MEANINGFUL subset (same field name, cleaner data);
+    # the rejected items move to the NEW ocr_appendix_full (raw, for reference).
+    # Enumerations are split the same way. total_*_captured keeps the full count
+    # (meaningful + filtered) so "how much was captured" stays comparable.
+    ocr_meaningful, ocr_filtered = filter_ocr_items(all_ocr_text)
+    enum_meaningful, enum_dropped = filter_enumerated_observations(all_enumerated)
+
     return {
         "source_video": source_video,
         "source_model": source_model,
@@ -333,8 +359,10 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
         "overview": overview,
         "topics_covered": topics_covered,
         "all_observed_facts": all_observed_facts,
-        "all_enumerated_observations": all_enumerated,
-        "all_ocr_text": all_ocr_text,
+        "all_enumerated_observations": enum_meaningful,
+        "enumerated_dropped_count": len(enum_dropped),
+        "all_ocr_text": ocr_meaningful,
+        "ocr_appendix_full": ocr_filtered,
         "audio_transcript_full": audio_transcript_full,
         "audio_quality": _worst_quality(qualities),
         "audio_events": _dedup_exact(audio_events_all),
@@ -343,10 +371,14 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
         "value_updates": value_updates,
         "visual_summary": visual_summary,
         "metrics": {
-            "total_ocr_items_captured": len(all_ocr_text),
-            "total_enumerated_observations": len(all_enumerated),
+            "total_ocr_items_captured": len(ocr_meaningful) + len(ocr_filtered),
+            "total_enumerated_observations": len(enum_meaningful) + len(enum_dropped),
             "recall_estimate_avg": round(sum(recalls) / len(recalls), 3) if recalls else 0.0,
             "frame_sampling_rate_used": max(fsr) if fsr else 0,
+            "meaningful_ocr_items": len(ocr_meaningful),
+            "filtered_ocr_items": len(ocr_filtered),
+            "meaningful_observations": len(enum_meaningful),
+            "filtered_observations": len(enum_dropped),
         },
         "metadata": {
             "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
