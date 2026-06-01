@@ -145,7 +145,7 @@ def _add_title_page(doc, r):
 
 
 def _add_overview_section(doc, r):
-    _heading(doc, "Overview", 1)
+    _heading(doc, "Key Findings", 1)
     ov = _s(r.get("overview")).strip()
     _para(doc, ov if ov else "No overview available.", italic=not ov)
     topics = r.get("topics_covered") or []
@@ -270,22 +270,47 @@ def _add_visual_summary_section(doc, r):
           size=10, italic=True)
 
 
-def _add_ocr_appendix(doc, r):
+def _add_key_terms_section(doc, r):
+    """Prominent: the MEANINGFUL filtered OCR (numbers, prices, names, headlines)."""
     ocr = r.get("all_ocr_text") or []
     items, extra = _capped(ocr)
-    _heading(doc, f"Raw OCR Text — Verbatim ({len(ocr)} items)", 1)
+    _heading(doc, f"Key Terms Captured ({len(ocr)})", 1)
     if not items:
-        _para(doc, "No on-screen text captured.", italic=True)
+        _para(doc, "No meaningful terms captured.", italic=True)
         return
-    # 9pt, joined by interpunct; paginate every PAGE_EVERY*4 items to bound page size
+    _para(doc,
+          f"Filtered OCR captured {len(ocr)} meaningful items (numbers, prices, "
+          f"names, headlines). The full raw OCR is in the Technical OCR Reference "
+          f"appendix.", size=9, italic=True)
     chunk = PAGE_EVERY * 4
     for start in range(0, len(items), chunk):
         seg = items[start:start + chunk]
-        _para(doc, " · ".join(_s(x) for x in seg), size=9)
+        _para(doc, " · ".join(_s(x) for x in seg), size=10)
+    if extra:
+        _para(doc, f"... and {extra} more", italic=True)
+
+
+def _add_technical_ocr_appendix(doc, r):
+    """Demoted: the raw rejected OCR, 8pt, on its own page, marked reference-only."""
+    doc.add_page_break()
+    items_all = r.get("ocr_appendix_full") or []
+    items, extra = _capped(items_all)
+    _heading(doc, f"Technical OCR Reference — Appendix ({len(items_all)})", 1)
+    _para(doc,
+          "For technical verification only. Raw OCR items that did not pass quality "
+          "filtering (single characters, particles, OCR fragments, mojibake). Provided "
+          "for completeness and debugging.", size=9, italic=True)
+    if not items:
+        _para(doc, "No additional raw items.", italic=True)
+        return
+    chunk = PAGE_EVERY * 6
+    for start in range(0, len(items), chunk):
+        seg = items[start:start + chunk]
+        _para(doc, " · ".join(_s(x) for x in seg), size=8)
         if start + chunk < len(items):
             doc.add_page_break()
     if extra:
-        _para(doc, f"... and {extra} more", italic=True)
+        _para(doc, f"... and {extra} more", size=8, italic=True)
 
 
 def _add_metadata_footer(doc, r):
@@ -309,7 +334,8 @@ def generate_word_report(report: dict) -> BytesIO:
     _add_timeline_section(doc, report)
     _add_value_updates_section(doc, report)
     _add_visual_summary_section(doc, report)
-    _add_ocr_appendix(doc, report)
+    _add_key_terms_section(doc, report)        # prominent: meaningful OCR
+    _add_technical_ocr_appendix(doc, report)   # demoted: raw rejected OCR (8pt)
     _add_metadata_footer(doc, report)
     buf = BytesIO()
     doc.save(buf)
