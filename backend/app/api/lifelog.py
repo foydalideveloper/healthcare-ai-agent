@@ -18,10 +18,14 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.database import get_db_admin
 from app.services.full_report_aggregator import aggregate_events_to_full_report
+from app.services.word_exporter import generate_word_report
+
+_DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 router = APIRouter(prefix="/lifelog", tags=["lifelog"])
 
@@ -156,3 +160,40 @@ async def lifelog_full_report(
         return JSONResponse(
             {"error": "No events found", "source_video": source_video}, status_code=404)
     return aggregate_events_to_full_report(events)
+
+
+@router.get("/full-report.docx")
+async def lifelog_full_report_docx(
+    source_video: str = Query(..., description="e.g. 20260528144922838.mp4"),
+    user_id: int = Query(1, description="User ID"),
+    source_model: Optional[str] = Query(None, description="omit to aggregate ALL arms"),
+):
+    """Stream the consolidated report as a Word .docx (same data as /full-report)."""
+    try:
+        events = await _fetch_events_for_video(user_id, source_video, source_model)
+    except httpx.TimeoutException:
+        return JSONResponse({"error": "supabase timeout"}, status_code=504)
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"{type(e).__name__}: {str(e)[:200]}"}, status_code=502)
+    if not events:
+        return JSONResponse(
+            {"error": "No events found", "source_video": source_video}, status_code=404)
+
+    report = aggregate_events_to_full_report(events)
+    buf = generate_word_report(report)  # seek(0) BytesIO
+
+    safe = source_video.replace(".mp4", "").replace(".", "_")
+    stamp = _re_compact_date(report.get("video_date", ""))
+    arm = source_model or "all-arms"
+    filename = f"lifelog_report_{safe}_{arm}_{stamp}.docx".replace(" ", "_")
+    return StreamingResponse(
+        buf,
+        media_type=_DOCX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _re_compact_date(d: str) -> str:
+    """'2026-06-01' -> '20260601' (best-effort; empty if unparseable)."""
+    return "".join(ch for ch in (d or "") if ch.isdigit())[:8]
