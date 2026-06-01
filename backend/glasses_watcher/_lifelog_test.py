@@ -44,6 +44,22 @@ from PIL import Image
 
 KST = timezone(timedelta(hours=9))
 
+# ── CRITICAL IMPORT ORDER: torch BEFORE PaddlePaddle ───────────────────
+# PaddlePaddle (pulled in by ocr_preprocessor -> paddleocr below) and
+# torch/ctranslate2 (faster-whisper) bundle conflicting CUDA/cuDNN DLLs.
+# Whichever loads first wins; the loser hits "WinError 127: procedure not
+# found". Verified: paddle-then-torch BREAKS torch (and Whisper); torch-then-
+# paddle works for ALL three. Importing torch here — before the
+# ocr_preprocessor import — preloads torch's cuDNN9/cuBLAS so both Whisper and
+# Paddle work. This is the real fix for the intermittent "[whisper] failed:
+# WinError 127" (it was deterministic on the watcher path, where paddle is
+# imported before Whisper ever runs).
+try:
+    import torch  # noqa: F401  (import-order side effect; not used directly here)
+except Exception as _torch_e:  # pragma: no cover
+    print(f"[WARN] torch preimport failed ({type(_torch_e).__name__}); "
+          f"Whisper (faster-whisper/ctranslate2) may hit WinError 127")
+
 # Reuse Gemma helpers
 sys.path.insert(0, str(Path(__file__).parent))
 from gemma_dual_extractor import (
@@ -492,6 +508,8 @@ _WHISPER_MODEL = None
 def _get_whisper_model():
     global _WHISPER_MODEL
     if _WHISPER_MODEL is None:
+        # torch is preimported at module top (BEFORE paddle) — that ordering is
+        # what lets ctranslate2 resolve cuDNN9/cuBLAS and avoids WinError 127.
         from faster_whisper import WhisperModel
         _WHISPER_MODEL = WhisperModel(
             WHISPER_MODEL_NAME,
