@@ -369,12 +369,12 @@ Output ONLY valid JSON. Schema:
     ]
   },
 
-  // ─── v3.2: DETAILED ENUMERATION (boss-facing — surfaces every captured item) ───
-  // A flat list of one-sentence plain-English facts, ONE per significant item.
-  // This is what the user reads in the dashboard. See the DETAILED ENUMERATION
-  // rule at the bottom of this prompt. Required (use [] only if truly nothing).
+  // ─── v3.3: DETAILED ENUMERATION (boss-facing — meaningful items only) ───
+  // A flat list of one-sentence plain-English facts, ONE per MEANINGFUL item
+  // (skip particles / single chars / OCR garbage — see the rule at the bottom).
+  // This is what the user reads in the dashboard. Required (use [] if nothing).
   "enumerated_observations": [
-    "<one plain-English sentence per significant on-screen / audio item>"
+    "<one plain-English sentence per MEANINGFUL on-screen / audio item>"
   ]
 }
 
@@ -387,8 +387,19 @@ Rules:
 - Korean speech → keep Korean in short fields. Numbers → use digits. Tickers → uppercase Latin.
 - v2 ENRICHMENT RULES (apply to EVERY event):
     * ALWAYS fill `confidence` (0.0-1.0). If you're guessing, ≤0.5.
-    * ALWAYS split into `observed_facts` (what you SAW/HEARD) and `inferred_context`
-      (what you GUESSED). Don't blur the line. Reduces hallucination.
+    * `observed_facts`: list 15-30 SUBSTANTIVE factual statements about what is on
+      screen / what the user sees. Each MUST follow WHO-or-WHAT + RELATIONSHIP/VALUE.
+      GOOD:
+        - "KOSPI index displayed at 8,228.70, up 181.19 points (+2.25%)."
+        - "Samsung Electronics at 307,000 won, gaining 8,000 won (+2.68%)."
+        - "Headline reports SK Hynix joined the $1 trillion market-cap club."
+        - "UBS raised Micron target price from $535 to $1,625 (3x upgrade)."
+        - "News broadcast shown on KBS11 with a sign-language interpreter overlay."
+      BAD (DO NOT WRITE): "KOSPI is visible" (no value); "Stock chart on screen"
+        (no subject); "Korean text shown" (no content).
+      If >=15 unique substantive facts are available from OCR + context, include
+      them ALL; fewer only if the scene genuinely lacks content. Keep
+      `inferred_context` for GUESSES, clearly separate from observed_facts.
     * ALWAYS fill `importance` (1-10). Stock recommendation = 8-9; sip of water = 2.
     * ALWAYS fill `memory_relevance`. Random office sitting = "low"; financial advice = "high".
     * Fill `screen_analysis` whenever ANY screen is visible.
@@ -440,30 +451,32 @@ Rules:
     * `combined_analysis.cross_modal_confidence` is high (>=0.8) when video
       and audio AGREE (e.g. anchor visible AND anchor speaking about NVDA),
       low (<=0.4) when they disagree or one is missing.
-- v3.2 DETAILED ENUMERATION (do NOT skip — this is what the user actually reads):
-    The user wants to SEE every significant captured item explained in plain
-    words, not compressed into a handful of bullets. Populate the top-level
-    `enumerated_observations` array with one-sentence natural-language facts —
-    ONE sentence per significant item: every number, ticker, percentage,
-    currency value, headline, label, and on-screen text item. In particular,
-    write a sentence for EVERY entry in the injected OCR ground-truth list
-    ("## On-screen text detected by OCR") that is meaningful.
-    Rules:
-      * One complete sentence per item. Simple English. Explain what it shows.
-      * Style references ONLY (do NOT copy verbatim — describe the real items):
-        - "Stock index KOSPI shows the value 8,228.70."
-        - "Samsung Electronics is priced at 307,000 won, up 8,000 won (+2.68%)."
-        - "The foreign-exchange board shows EUR/USD at 0.7161."
-        - "A headline reads 'SK Hynix joins the 1 trillion dollar club'."
-        - "A QR code is visible in the bottom-left of the screen."
-      * DO NOT summarize multiple items into one sentence.
-      * DO NOT skip items because they look repetitive.
-      * DO NOT use bullet characters — each entry is a plain sentence string.
-      * If an item is clearly OCR noise (single stray character, gibberish),
-        skip it silently rather than inventing meaning.
-      * Target between 80 and 250 sentences, depending on how much was captured.
-    `observed_facts` stays your SHORT high-level summary (6-12 bullets);
-    `enumerated_observations` is the LONG detailed list. BOTH are required.
+- v3.3 DETAILED ENUMERATION (do NOT skip — this is what the user actually reads):
+    Populate the top-level `enumerated_observations` array with one factual
+    sentence per MEANINGFUL on-screen / audio item. A MEANINGFUL item conveys
+    information. Items WITHOUT information MUST be SKIPPED (do not write a
+    sentence for them):
+      * Single Korean particles ("의","를","는","이","가") -> SKIP
+      * Single Latin letters -> SKIP
+      * OCR-garbled tokens (mixed character sets, broken CamelCase, repeated
+        junk like "LLLVA"/"WiHdoWs", mojibake / replacement chars) -> SKIP
+      * Standalone "X is visible" with no value or context -> SKIP
+    For MEANINGFUL items, write a sentence with subject + value/relationship:
+      GOOD:
+        - "Stock index KOSPI shows value 8,228.70."
+        - "Samsung Electronics stock price displayed at 307,000 won."
+        - "Foreign exchange rate USD/KRW shown at 1,501.80."
+        - "Headline reads 'ETF 업고 반도체 독주 이틀째 최고치'."
+        - "QR code visible in the bottom-left corner of the screen."
+      BAD (DO NOT WRITE THESE):
+        - "The text '의' is visible on the screen." (particle, no info)
+        - "The character '를' is visible." (single character)
+        - "The text 'WiHdoWs' is visible on the screen." (OCR garbage)
+        - "The number '0' is visible." (no context for the digit)
+    Target 50-150 MEANINGFUL sentences. Quality beats quantity — if an OCR item
+    is ambiguous or garbled, OMIT it rather than write a low-info sentence.
+    `observed_facts` is the substantive high-level layer; `enumerated_observations`
+    is the detailed per-item layer. BOTH are required.
 """
 
 
