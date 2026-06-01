@@ -16,9 +16,12 @@ Returns:
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 
 from app.database import get_db_admin
+from app.services.full_report_aggregator import aggregate_events_to_full_report
 
 router = APIRouter(prefix="/lifelog", tags=["lifelog"])
 
@@ -97,3 +100,59 @@ async def lifelog_events(
                 row[k] = v
 
     return {"events": rows, "count": len(rows)}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Full Report — consolidate ALL events for one source_video into one view
+# ──────────────────────────────────────────────────────────────────────
+
+async def _fetch_events_for_video(
+    user_id: int, source_video: str, source_model: Optional[str],
+) -> list[dict]:
+    """Fetch every event row for one (user, source_video[, source_model]) and
+    flatten raw_event into each row (so VLM fields like observed_facts / topic
+    are readable alongside the v3 JSONB columns). Mirrors the /events pattern."""
+    db = get_db_admin()
+    params = [
+        ("select", "*"),
+        ("user_id", f"eq.{user_id}"),
+        ("source_video", f"eq.{source_video}"),
+        ("order", "observed_at.asc"),
+    ]
+    if source_model:
+        params.append(("source_model", f"eq.{source_model}"))
+    resp = await db._client.get("/lifelog_event", params=params)
+    resp.raise_for_status()
+    rows = resp.json()
+    if not isinstance(rows, list):
+        return []
+    for row in rows:
+        extras = row.pop("raw_event", None) or {}
+        for k, v in extras.items():
+            if k not in row:
+                row[k] = v
+    return rows
+
+
+@router.get("/full-report")
+async def lifelog_full_report(
+    source_video: str = Query(..., description="e.g. 20260528144922838.mp4"),
+    user_id: int = Query(1, description="User ID"),
+    source_model: Optional[str] = Query(
+        None, description="one arm's tag; omit to aggregate ALL arms"),
+):
+    """Consolidate every event for one source_video into one comprehensive
+    report (arm-scoped by default; cross-arm when source_model is omitted)."""
+    try:
+        events = await _fetch_events_for_video(user_id, source_video, source_model)
+    except httpx.TimeoutException:
+        return JSONResponse(
+            {"error": "supabase timeout", "source_video": source_video}, status_code=504)
+    except Exception as e:  # network / PostgREST error — surface, don't 500 opaquely
+        return JSONResponse(
+            {"error": f"{type(e).__name__}: {str(e)[:200]}", "source_video": source_video},
+            status_code=502)
+    if not events:
+        return JSONResponse(
+            {"error": "No events found", "source_video": source_video}, status_code=404)
+    return aggregate_events_to_full_report(events)
