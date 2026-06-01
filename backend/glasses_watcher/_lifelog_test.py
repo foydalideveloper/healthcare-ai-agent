@@ -1832,6 +1832,27 @@ def run(video_path: Path, compare: bool, chunk_sec: int = 60,
         except Exception:
             video_start = None
 
+        # Sanity-check the filename stamp against the file's mtime. The AIMB-G1
+        # glasses clock can be wrong (observed 2026-06: stuck days behind,
+        # stamping June clips as "20260528..."). mtime is when Syncthing wrote
+        # the clip to this PC — at most a short sync delay after recording — so
+        # (mtime - duration) ~ recording start. If the filename time disagrees
+        # by more than 12h, trust mtime (12h >> any real sync delay, << the
+        # multi-day glasses drift, so legit slightly-late syncs still keep the
+        # more precise filename stamp).
+        if video_start is not None:
+            try:
+                mtime_start = (datetime.fromtimestamp(video_path.stat().st_mtime, tz=timezone.utc)
+                               - timedelta(seconds=duration))
+                drift_h = abs((video_start - mtime_start).total_seconds()) / 3600.0
+                if drift_h > 12:
+                    print(f"  [time] filename stamp ({video_start.date()}) disagrees with file "
+                          f"mtime by {drift_h:.1f}h - glasses clock suspect; using mtime "
+                          f"-> {mtime_start.date()}")
+                    video_start = mtime_start
+            except Exception:
+                pass
+
         if video_start is None:
             # Fallback: mtime − duration, so observed_at lands at recording start.
             try:
