@@ -498,10 +498,17 @@ def sample_frames_window(video_path: Path, start_sec: float, end_sec: float,
 # Audio extraction + Whisper transcript (optional, hugely improves quality)
 # ──────────────────────────────────────────────────────────────────────
 
-# Local faster-whisper (RTX 5090). Model is cached at module scope after first load.
+# Local faster-whisper. Model is cached at module scope after first load.
+# DEVICE = "cpu" on purpose: Gemma 4 26B Q8 needs ~30GB of the 32GB GPU, so
+# Paddle (OCR, ~1.5GB) + Gemma already nearly fill it. Putting Whisper on the
+# GPU too (its model + torch's CUDA context) made Ollama spill Gemma to CPU and
+# time out. CPU Whisper (int8, ~30-60s for a 60s clip on the Ryzen 9800X3D)
+# keeps the GPU free for Gemma — and sidesteps the ctranslate2 cuDNN WinError
+# 127 entirely (CPU backend needs no cuDNN). Override to "cuda"/"float16" only
+# for cloud-only arm runs where no big local model competes for VRAM.
 WHISPER_MODEL_NAME = "large-v3"
-WHISPER_DEVICE = "cuda"
-WHISPER_COMPUTE_TYPE = "float16"
+WHISPER_DEVICE = "cpu"
+WHISPER_COMPUTE_TYPE = "int8"
 _WHISPER_MODEL = None
 
 
@@ -1713,6 +1720,24 @@ def run(video_path: Path, compare: bool, chunk_sec: int = 60,
             audio_path.unlink()
         except Exception:
             pass
+
+    # Free Whisper's GPU memory before the chunk loop. Gemma 4 26B Q8 needs
+    # ~30GB of the 32GB card; leaving Whisper's ctranslate2 model (~4GB) +
+    # PaddleOCR resident makes Ollama unable to fit Gemma -> it spills to CPU
+    # and blows the read timeout (observed after the Whisper WinError-127 fix
+    # started actually loading the model). Whisper isn't needed past this point.
+    global _WHISPER_MODEL
+    if _WHISPER_MODEL is not None:
+        _WHISPER_MODEL = None
+        try:
+            import gc
+            gc.collect()
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        print("  [vram] released Whisper model to free GPU for Gemma")
 
     # Step 2: process chunks (in parallel)
     n_chunks = max(1, int(duration / chunk_sec) + (1 if duration % chunk_sec else 0))
