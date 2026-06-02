@@ -329,7 +329,9 @@ def generate_word_report(report: dict) -> BytesIO:
     _add_title_page(doc, report)
     _add_overview_section(doc, report)
     _add_observed_facts_section(doc, report)
-    _add_enumerated_observations_section(doc, report)
+    # Detailed Observations intentionally NOT rendered in the .docx (v3.3 decision):
+    # observed_facts (~48) already covers the micro-details, and a separate section
+    # was redundant. The enumerated_observations field is still in the JSON API.
     _add_audio_section(doc, report)
     _add_timeline_section(doc, report)
     _add_value_updates_section(doc, report)
