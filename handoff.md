@@ -1,6 +1,6 @@
 # Healthcare AI Agent — RESUME HERE (Session Handoff)
 
-**Last updated:** 2026-06-02, end of **audio-xref session** (schema v3.3 → **v3.4**).
+**Last updated:** 2026-06-02, end of **6-arm session** (added 2 Gemini 3 arms on top of v3.4).
 **This is the FIRST file to read when resuming.** It is the umbrella + the current-state pointer.
 
 > ## Read order on resume
@@ -12,7 +12,36 @@
 
 ---
 
-## ⭐ LATEST: v3.4 Audio-OCR Cross-Reference Layer (2026-06-02) — COMPLETE
+## ⭐ LATEST: 6-Arm Pipeline — Gemini 3 Watchers (2026-06-02) — COMPLETE
+
+**Two new LLM arms added: `gemini_3_1_pro_preview` + `gemini_3_5_flash`. Total arms 4 → 6.** Purely additive; the existing 4 arms (gemma4, qwen, llama4, gemini_2_5_pro) are untouched.
+
+**Design — Option A (env-override watchers).** Phase 0 found the repo does NOT use the `google.generativeai` SDK (it's raw httpx REST to `generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`), has NO `ARMS` dict (hard-coded 4-key boolean dispatch: gemma/qwen=compare/llama4/gemini), and reads ONE global gemini model from `GEMINI_MODEL` env per process. So instead of the mission's SDK/dispatch surgery, each new watcher sets `GEMINI_MODEL=<its model>` and reuses the existing gemini REST path. **`_lifelog_test.py` was NOT modified** — that's why `gemini_2_5_pro` stayed intact. `source_model` auto-derives via `_model_to_source_tag(model)`.
+
+**Commits:**
+- `649c2b2` **gemini-3-arms** — `_arm_helpers.py` (+ARM_FLAGS/ARM_LABELS/ARM_GEMINI_MODEL map + env-override in `run_single_arm`); NEW `gemini_3_1_pro_watcher.py` + `gemini_3_5_flash_watcher.py` (4-line stubs); `lifelog/page.tsx` (+2 SELECTABLE_SOURCES + SOURCE_BADGE: 3.1 Pro=orange, 3.5 Flash=cyan). Also **adopted the previously-untracked watcher system into git** (gemma4/qwen/llama/gemini watchers — secret-scanned clean).
+
+**Live-verified (test clip `20260528144922838.mp4`, written to Supabase):**
+- Both models exist on the API and return HTTP 200. `gemini_3_1_pro_preview`=2 rows, `gemini_3_5_flash`=2 rows, both dated **2026-06-01** (glasses-clock mtime fallback). `gemini_2_5_pro` INTACT (44 rows, 5 clips, untouched).
+- **v3.4 audio-xref auto-active on the new arms** (gemini_3_5_flash report = schema v3.4, value_updates with source tags, audio_only_terms=4).
+
+**Per-arm latency profile (5 cloud/local entries — was 4):**
+| Arm | Model | Latency (per 60s chunk) | Notes |
+|---|---|---|---|
+| Gemma 4 26B (local) | gemma4:26b-a4b-it-q8_0 | ~50s full clip | primary local; GPU-locked w/ Qwen |
+| Qwen 3.5 VL (local) | qwen3-vl:30b-a3b-q4 | varies | JSON-salvage; shares GPU lock |
+| Llama 4 Maverick (NIM) | llama-4-maverick-17b-128e | ~cloud, flaky | NIM random 500s |
+| Gemini 2.5 Pro (cloud) | gemini-2.5-pro | reliable | the dependable cloud arm |
+| **Gemini 3.5 Flash (cloud)** | gemini-3.5-flash | **~40–53s/chunk** | NEW; faster |
+| **Gemini 3.1 Pro Preview (cloud)** | gemini-3.1-pro-preview | **~220s/chunk** | NEW; markedly slower |
+
+**Model-variance observation:** on this clip, Pro Preview produced FEWER events (2) than Flash (5 smoke / 2 DB) — even at temperature 0 the event/chunk count varies between runs. Pro Preview may be more conservative (fewer, denser events) vs Flash's higher recall. **Worth a proper A/B comparison next session** (event count, fact richness, Korean accuracy) before picking a default Gemini arm.
+
+**Operational notes:** the new gemini arms run as SEPARATE watcher processes (the project's production pattern), not one `--pipeline` run — by design (one global gemini model per process). The `/lifelog/ask` standalone page still has pre-existing uncommitted edits + its own registry; left untouched (the inline per-event Ask picker already shows all 6 via SELECTABLE_SOURCES). The gemma4 watcher was stopped during testing — restart with `python gemma4_watcher.py --watch` from `backend/glasses_watcher`.
+
+---
+
+## v3.4 Audio-OCR Cross-Reference Layer (2026-06-02) — COMPLETE
 
 **The architectural gap is fixed.** Previously the Whisper transcript was semi-isolated: structured sections (Value Updates, Key Terms) were OCR-only, so audio-spoken values like "SK하이닉스 시가총액 1,600조 원" or "마이크론 19% 급등" never reached the structured tables. v3.4 adds a **purely additive, aggregator-time** layer that parses the transcript for structured facts, cross-references them against OCR, and promotes them.
 
@@ -145,6 +174,9 @@ All of this is **committed** (see §8 for the exact last commit). Key files:
    - **Multi-entity positional pairing with 각각/respectively marker** — the audio-xref extractor (`audio_fact_extractor.py`) uses nearest-left entity match; it doesn't handle list-pair semantics where N values map to N entities by position. e.g. "각각 2.7%, 9.3% 급등한 삼성전자와 SK하이닉스" attaches 삼성전자 to BOTH percentages, when 9.3% should pair to SK하이닉스. Cosmetic mislabel on the audio Value-Updates rows; deferred (added 2026-06-02 audio-xref session).
    - **Source tagging on `observed_facts`** (audio / video / both) — would require a LIFELOG_PROMPT change + **re-extraction** of events; skipped this session to avoid regression risk. The v3.4 layer only tags `value_updates`, which is post-processing-safe.
    - **Audio-fact entity-coverage expansion** — `KOREAN_FINANCIAL_ENTITIES` currently covers EN/KO financial names (semiconductors, indices, banks). Could extend to more sectors (healthcare, energy, consumer) as the clip corpus broadens.
+   - **Gemini arm A/B comparison** — Pro Preview (slower, fewer/denser events) vs 3.5 Flash (faster, higher recall) vs 2.5 Pro. Compare event count, fact richness, Korean accuracy before choosing a default Gemini arm. (added 2026-06-02 6-arm session.)
+   - **Dead default `GEMINI_MODEL_DEFAULT="gemini-3.1-pro"`** in `_lifelog_test.py:1131` — that exact ID does NOT exist on the API (only `gemini-3.1-pro-preview` does). Harmless today because `backend/.env` pins `GEMINI_MODEL=gemini-2.5-pro`, but the fallback is dead. Update the default to a real ID someday. (cleanup; added 2026-06-02.)
+   - **Git hygiene — 3 untracked non-watcher files** in `backend/glasses_watcher/`: `_v2_audit.py`, `tests/__init__.py`, `tests/test_ocr_preprocessor.py`. Left untracked when the watcher system was adopted (they're not watchers). Decide whether to track or .gitignore them. (added 2026-06-02.)
 3. **Recall:** stuck ~58% substring / **~88% fuzzy** (`recall_fuzzy` in `tests/test_recall_measure.py`). The substring metric is hostile; real capture ~88%. Ceiling is OCR read-quality + the metric — only addressable via off-limits higher-DPI / DBSCAN-eps.
 
 ---
