@@ -1,6 +1,6 @@
 # Healthcare AI Agent — RESUME HERE (Session Handoff)
 
-**Last updated:** 2026-06-02, end of session (context running out → new session).
+**Last updated:** 2026-06-02, end of **audio-xref session** (schema v3.3 → **v3.4**).
 **This is the FIRST file to read when resuming.** It is the umbrella + the current-state pointer.
 
 > ## Read order on resume
@@ -9,6 +9,32 @@
 > 3. **`handoff_2026-05-29.md`** — prior session (paths, services, quick-start commands).
 > 4. **`CLAUDE.md`** — architecture overview (LLM layers, DB, project structure).
 > 5. Deep state of record: `~/.claude/projects/C--Users-tripleh/memory/project_healthcare_complete_handoff.md` (0-to-100% locked decisions). NOTE: this session ran under user `C--Users-A`; memory index is at `C:\Users\A\.claude\projects\C--Users-A\memory\MEMORY.md`.
+
+---
+
+## ⭐ LATEST: v3.4 Audio-OCR Cross-Reference Layer (2026-06-02) — COMPLETE
+
+**The architectural gap is fixed.** Previously the Whisper transcript was semi-isolated: structured sections (Value Updates, Key Terms) were OCR-only, so audio-spoken values like "SK하이닉스 시가총액 1,600조 원" or "마이크론 19% 급등" never reached the structured tables. v3.4 adds a **purely additive, aggregator-time** layer that parses the transcript for structured facts, cross-references them against OCR, and promotes them.
+
+**What shipped (5 commits, all independently revertible):**
+- `039638d` **audio-xref-extractor** — NEW `backend/app/services/audio_fact_extractor.py` (pure stdlib, no pipeline imports). Parses Korean trillion-currency / won / % / USD / year-range / multiplier; detects financial entity + claim_type from context; cross-references vs OCR; promotes. **30 unit tests** in `backend/app/services/tests/test_audio_fact_extractor.py` (all pass).
+- `ea98809` **audio-xref-aggregator** — wired into `full_report_aggregator.py` after dedup+quality-filter, before return. Schema **v3.3 → v3.4**. New metrics: `audio_facts_extracted`, `audio_facts_cross_referenced`, `audio_only_facts`. New field `audio_only_terms`.
+- `96e60c4` **audio-xref-tuning** — conservative full-token cross-ref (no bare-digit collision) + skip currency-unit/bare-multiplier label noise.
+- `16ac9dc` **audio-xref-word** — `word_exporter.py`: Value Updates gains a **Source** column (Audio=blue / Video), claim_type subtitle, an **Audio-only Mentions** Key-Terms sub-section, +2 title-page metric rows.
+- `8ad418f` **audio-xref-frontend** — `lifelog/page.tsx`: source badges + claim_type subtitles in the Full Report modal, Audio-only Mentions sub-section, **Esc-to-close**. Defensive vs old events lacking the new fields.
+
+**Result on the KBS test clip (`20260528144922838.mp4`, gemma4):** value_updates **4 → 11** (4 video + 7 audio); **audio_only_terms = 4**; metrics extracted=10 / cross-referenced=5 / audio-only=5. Word doc 44 → **45.5 KB**.
+
+**ZERO regressions** (every check byte-identical to `test_data/kbs_clip/baseline_pre_audio_xref.json`): observed_facts **49**, Key Terms **416**, OCR appendix **349**, timeline **4 windows**, headlines **3**, panels **213**, recall **0.95**, transcript text unchanged, Korean Malgun Gothic intact (34 CJK runs, 0 missing eastAsia), 0 mojibake.
+
+**v3.4 caveats (new):**
+- a. **Nearest-left entity match.** The extractor attaches the closest preceding entity to a value; it does NOT do multi-entity positional pairing. "각각 2.7%, 9.3% 급등한 삼성전자와 SK하이닉스" mislabels 9.3% to 삼성전자 (should be SK하이닉스). Cosmetic; deferred (§9).
+- b. **Conservative cross-ref by design.** Matching uses the full normalized token (digits **+** unit), NOT the bare numeric core — a lone "1600" in the busy OCR dump must not mask the audio-only "1,600조 원" market-cap claim. This is deliberate; do not "loosen" it back to digit-substring matching.
+- c. **Generic-label rows kept.** A real fact with a non-specific label (e.g. `time_range / 3년에서 5년`, supply-contract extension) is KEPT as a distinct audio Value-Updates row even though its label isn't an entity — the boss demo benefits from seeing it.
+
+**Latest report artifact:** `test_data/kbs_clip/test_report_v34.docx` (45.5 KB). Baseline for regression diffing: `test_data/kbs_clip/baseline_pre_audio_xref.json`.
+
+**Off-limits honored:** no touch to `ocr_preprocessor.py` / LIFELOG_PROMPT / `_lifelog_test.py` / watchers; no migrations; no new packages; no re-extraction. All work is post-processing at aggregator/exporter/frontend time.
 
 ---
 
@@ -116,6 +142,9 @@ All of this is **committed** (see §8 for the exact last commit). Key files:
    - value_updates multi-value deltas on noisy OCR — needs `detect_value_changes` robustness in the **off-limits** `ocr_preprocessor.py`.
    - Glasses clock re-sync via AIMB bridge (mtime fallback is a safety net, not a cure).
    - AIMB-G1 BLE auto-wake (blocked — see `aimb-bridge-android/handoff.md`).
+   - **Multi-entity positional pairing with 각각/respectively marker** — the audio-xref extractor (`audio_fact_extractor.py`) uses nearest-left entity match; it doesn't handle list-pair semantics where N values map to N entities by position. e.g. "각각 2.7%, 9.3% 급등한 삼성전자와 SK하이닉스" attaches 삼성전자 to BOTH percentages, when 9.3% should pair to SK하이닉스. Cosmetic mislabel on the audio Value-Updates rows; deferred (added 2026-06-02 audio-xref session).
+   - **Source tagging on `observed_facts`** (audio / video / both) — would require a LIFELOG_PROMPT change + **re-extraction** of events; skipped this session to avoid regression risk. The v3.4 layer only tags `value_updates`, which is post-processing-safe.
+   - **Audio-fact entity-coverage expansion** — `KOREAN_FINANCIAL_ENTITIES` currently covers EN/KO financial names (semiconductors, indices, banks). Could extend to more sectors (healthcare, energy, consumer) as the clip corpus broadens.
 3. **Recall:** stuck ~58% substring / **~88% fuzzy** (`recall_fuzzy` in `tests/test_recall_measure.py`). The substring metric is hostile; real capture ~88%. Ceiling is OCR read-quality + the metric — only addressable via off-limits higher-DPI / DBSCAN-eps.
 
 ---
