@@ -39,6 +39,11 @@ RANKING_PHRASES = frozenset([
     "최고가", "신고가", "최저가",
 ])
 
+# Currency UNITS that live in KOREAN_FINANCIAL_ENTITIES so we can detect a value
+# is money — but they are NOT subjects, so they must never become a value_update
+# label (a row labelled "원" / "달러" is meaningless noise).
+_CURRENCY_UNIT_LABELS = frozenset(["원", "달러", "USD", "KRW", "엔", "위안"])
+
 # ============================================================================
 # Pattern definitions (ordered; first match wins per span via non-overlap)
 # ============================================================================
@@ -193,9 +198,13 @@ def _detect_claim_type(left: str, right: str, unit_type: str) -> Optional[str]:
 def cross_reference_with_ocr(audio_facts: list, ocr_items: list) -> tuple:
     """Split audio facts into (also_in_ocr, audio_only).
 
-    A fact is "also in OCR" if its whitespace/comma-stripped form appears in the
-    OCR blob, or (fallback) its >=3-digit numeric core appears there. Small
-    numeric differences (2.7% vs 2.68%) are NOT matched — separate observations.
+    A fact is "also in OCR" if its whitespace/comma-stripped form (digits AND
+    unit, e.g. "1600조원" / "19%") appears in the OCR blob. We deliberately do
+    NOT match on the bare numeric core: a lone "1600" appears all over a busy
+    OCR dump (panel values, indices) and would falsely mark the audio-only
+    "1,600조 원" market-cap claim as on-screen. Commas/spaces are normalized
+    away, so "8,228.70" still matches "8228.70". Small numeric differences
+    (2.7% vs 2.68%) remain separate observations.
     """
     ocr_blob = " · ".join(_as_str(x) for x in ocr_items).lower()
     ocr_blob_clean = re.sub(r'[\s,]', '', ocr_blob)
@@ -205,11 +214,7 @@ def cross_reference_with_ocr(audio_facts: list, ocr_items: list) -> tuple:
 
     for fact in audio_facts:
         normalized = re.sub(r'[\s,]', '', fact.raw_match.lower())
-        digits_only = re.sub(r'[^\d.]', '', fact.raw_match)
-
         if normalized and normalized in ocr_blob_clean:
-            also_in_ocr.append(fact)
-        elif digits_only and len(digits_only) >= 3 and digits_only in ocr_blob_clean:
             also_in_ocr.append(fact)
         else:
             audio_only.append(fact)
@@ -241,11 +246,19 @@ def promote_to_value_updates(audio_facts: list, existing_updates: list) -> list:
     for fact in audio_facts:
         if fact.claim_type is None:
             continue
-        # Skip low-info facts that carry no entity context.
-        if fact.entity is None and fact.claim_type in ('change', 'multiplier'):
+        # Bare multipliers ("2배" — leverage / ratio mentions) are low-value
+        # regardless of a loosely-attached entity; only price_increase_multiplier
+        # (a target-price hike) is a real value event.
+        if fact.claim_type == 'multiplier':
+            continue
+        # Entity-less generic percentage "change" (no gain/loss, no subject).
+        if fact.entity is None and fact.claim_type == 'change':
             continue
 
         label = fact.entity if fact.entity else fact.claim_type
+        # A currency unit ("원"/"달러") is not a subject — never a row label.
+        if label in _CURRENCY_UNIT_LABELS:
+            continue
         key = _audio_key(label, fact.raw_match)
         if key in existing_audio_keys:
             continue  # idempotent: already promoted this exact audio fact

@@ -163,6 +163,23 @@ def test_cross_ref_empty_ocr_all_audio_only():
     assert len(only) == len(facts)
 
 
+def test_cross_ref_no_bare_digit_collision():
+    # OCR has a lone "1600" (e.g. an index value) but NOT "1600조". The audio
+    # market-cap claim "1,600조 원" must NOT be treated as on-screen.
+    facts = extract_audio_facts("SK하이닉스의 시가총액은 1,600조 원 가까이")
+    ocr = ["KOSPI 1600", "패널 1600 포인트"]
+    also, only = cross_reference_with_ocr(facts, ocr)
+    assert any("1,600조" in f.raw_match for f in only)
+    assert not any("1,600조" in f.raw_match for f in also)
+
+
+def test_cross_ref_full_token_with_unit_matches():
+    # When OCR actually shows the value with its unit, it IS cross-referenced.
+    facts = extract_audio_facts("마이크론 주가가 19% 급등")
+    also, only = cross_reference_with_ocr(facts, ["마이크론 19% 상승"])
+    assert any(f.raw_match.replace(" ", "") == "19%" for f in also)
+
+
 # ── promote to value_updates ───────────────────────────────────────────────
 def test_existing_ocr_gets_video_tag():
     existing = [
@@ -190,6 +207,28 @@ def test_promote_skips_entityless_change():
     facts = extract_audio_facts("전체 지수는 3.0% 수준입니다")
     out = promote_to_value_updates(facts, [])
     assert not any(u.get("source") == "audio" for u in out)
+
+
+def test_promote_skips_currency_unit_label():
+    # "1조 달러" whose only nearby entity is the unit "달러"/"원" must not become
+    # a value_update row labelled with a bare currency unit.
+    facts = extract_audio_facts("불어나며 시총 1조 달러 클럽에 올랐습니다")
+    out = promote_to_value_updates(facts, [])
+    labels = [u["label"] for u in out if u.get("source") == "audio"]
+    assert "원" not in labels
+    assert "달러" not in labels
+
+
+def test_promote_skips_bare_multiplier_keeps_price_increase():
+    # Bare "2배" (leverage) skipped; "3배" near 올리 (price hike) kept.
+    bare = extract_audio_facts("레버리지 2배 ETF에 자금이 몰렸습니다")
+    out_bare = promote_to_value_updates(bare, [])
+    assert not any(u.get("source") == "audio" for u in out_bare)
+
+    hike = extract_audio_facts("마이크론 목표 주가를 단번에 3배나 올리면서")
+    out_hike = promote_to_value_updates(hike, [])
+    assert any(u.get("claim_type") == "price_increase_multiplier"
+               for u in out_hike if u.get("source") == "audio")
 
 
 def test_no_dup_on_idempotent_call():
