@@ -99,12 +99,17 @@ type AudioExtraction = {
 };
 
 // v3.1 Fix 3 — metric value change record
+// v3.4 — audio-OCR cross-reference: source/claim_type/context are optional and
+// only present on audio-derived rows (old rows omit them → treated as "video").
 type ValueUpdate = {
   label: string;
-  values: Array<{ value: string; frame_idx: number; timestamp_sec: number }>;
+  values: Array<{ value: string; frame_idx?: number | null; timestamp_sec?: number | null }>;
   change_count: number;
-  first_seen_sec: number;
-  last_seen_sec: number;
+  first_seen_sec?: number;
+  last_seen_sec?: number;
+  source?: "audio" | "video";
+  claim_type?: string;
+  context?: string;
 };
 
 // v3.1 Fix 4 — per-sub-window narrative entry
@@ -1274,7 +1279,8 @@ type FullReport = {
   audio_events: string[];
   language_detected: string;
   timeline: Array<{ window_sec: string; summary: string; key_items: string[] }>;
-  value_updates: Array<{ label: string; values: Array<{ value: string; timestamp_sec: number }>; change_count: number }>;
+  value_updates: ValueUpdate[];
+  audio_only_terms?: string[];   // v3.4 — audio-only mentions (may be absent on old reports)
   visual_summary: {
     visual_objects: string[]; ui_elements: string[]; charts_detected: string[];
     headlines: string[]; panels_detected_count: number; broadcast_mode: boolean;
@@ -1308,6 +1314,12 @@ function FullReportModal({
   onClose: () => void; onDownloadDocx: () => void;
 }) {
   const r = report;
+  // Close on Esc (backdrop-click and × already close it).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
          onClick={onClose}>
@@ -1391,11 +1403,27 @@ function FullReportModal({
 
               <FRSection title="Value Updates" count={r.value_updates.length}>
                 {r.value_updates.length > 0 ? (
-                  <ul className="space-y-1">
-                    {r.value_updates.map((v, i) => (
-                      <li key={i}><strong>{v.label}</strong>: {v.values.map(x => x.value).join(" → ")}
-                        {v.change_count > 1 ? <span className="text-gray-400"> ({v.change_count} changes)</span> : null}</li>
-                    ))}
+                  <ul className="space-y-1.5">
+                    {r.value_updates.map((v, i) => {
+                      const isAudio = v.source === "audio";   // missing source → treated as video
+                      return (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className={`shrink-0 mt-0.5 px-1.5 py-0.5 text-[10px] font-medium rounded ${
+                            isAudio ? "bg-blue-100 text-blue-700 border border-blue-200"
+                                    : "bg-gray-100 text-gray-600 border border-gray-200"}`}>
+                            {isAudio ? "Audio" : "Video"}
+                          </span>
+                          <div className="min-w-0">
+                            <div>
+                              <strong className={isAudio ? "text-blue-800" : ""}>{v.label}</strong>
+                              {": "}{v.values.map(x => x.value).join(" → ")}
+                              {v.change_count > 1 ? <span className="text-gray-400"> ({v.change_count} changes)</span> : null}
+                            </div>
+                            {v.claim_type ? <div className="text-xs text-gray-500">{v.claim_type}</div> : null}
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : <p className="italic text-gray-400">No metric value changes detected.</p>}
               </FRSection>
@@ -1417,6 +1445,17 @@ function FullReportModal({
               <FRSection title="Key Terms Captured" count={r.all_ocr_text.length}>
                 <p className="text-xs text-gray-500 mb-1">Filtered OCR — numbers, prices, names, headlines.</p>
                 <p className="text-[11px] text-gray-700 leading-relaxed break-words">{r.all_ocr_text.join(" · ") || "—"}</p>
+                {r.audio_only_terms && r.audio_only_terms.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-gray-100">
+                    <div className="text-sm font-semibold text-blue-800 mb-1">
+                      Audio-only Mentions <span className="text-gray-400 font-normal">· {r.audio_only_terms.length}</span>
+                    </div>
+                    <p className="text-xs text-gray-500 mb-1">
+                      Items mentioned in the audio transcript but not visible on screen as text.
+                    </p>
+                    <p className="text-[11px] text-gray-700 leading-relaxed break-words">{r.audio_only_terms.join(" · ")}</p>
+                  </div>
+                )}
               </FRSection>
 
               <FRSection title="Technical OCR Reference (raw)" count={r.ocr_appendix_full.length}>
