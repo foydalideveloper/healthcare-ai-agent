@@ -1253,6 +1253,189 @@ function fmtDate(iso: string): string {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Full Report — consolidated view of ALL events for one source_video
+// ─────────────────────────────────────────────────────────────────────
+type FullReport = {
+  source_video: string;
+  source_model: string;
+  event_count: number;
+  video_date: string;
+  video_time_range: { start_sec: number; end_sec: number };
+  duration_sec: number;
+  overview: string;
+  topics_covered: string[];
+  all_observed_facts: string[];
+  all_enumerated_observations: string[];
+  all_ocr_text: string[];
+  ocr_appendix_full: string[];
+  audio_transcript_full: string;
+  audio_quality: string;
+  audio_events: string[];
+  language_detected: string;
+  timeline: Array<{ window_sec: string; summary: string; key_items: string[] }>;
+  value_updates: Array<{ label: string; values: Array<{ value: string; timestamp_sec: number }>; change_count: number }>;
+  visual_summary: {
+    visual_objects: string[]; ui_elements: string[]; charts_detected: string[];
+    headlines: string[]; panels_detected_count: number; broadcast_mode: boolean;
+  };
+  metrics: {
+    total_ocr_items_captured: number; total_enumerated_observations: number;
+    recall_estimate_avg: number; frame_sampling_rate_used: number;
+    meaningful_ocr_items?: number; filtered_ocr_items?: number;
+    meaningful_observations?: number; filtered_observations?: number;
+  };
+  metadata: { generated_at: string; schema_version: string };
+};
+
+function FRSection({ title, count, children, open = false }:
+  { title: string; count?: number; children: React.ReactNode; open?: boolean }) {
+  return (
+    <details open={open} className="border-b border-gray-200 group">
+      <summary className="cursor-pointer select-none px-4 py-2 font-semibold text-sm text-gray-800 hover:bg-gray-50 flex items-center justify-between">
+        <span>{title}{count != null ? <span className="text-gray-400 font-normal"> · {count}</span> : null}</span>
+        <span className="text-gray-300 text-xs group-open:rotate-90 transition-transform">▶</span>
+      </summary>
+      <div className="px-4 py-3 text-sm text-gray-700">{children}</div>
+    </details>
+  );
+}
+
+function FullReportModal({
+  report, loading, error, onClose, onDownloadDocx,
+}: {
+  report: FullReport | null; loading: boolean; error: string | null;
+  onClose: () => void; onDownloadDocx: () => void;
+}) {
+  const r = report;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+         onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
+           onClick={e => e.stopPropagation()}>
+        {/* sticky header */}
+        <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-bold text-gray-900 truncate">📄 Full Report</div>
+            {r && (
+              <div className="text-xs text-gray-500 truncate">
+                {r.source_video} · {r.video_date} · {r.event_count} events · {r.source_model}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={onDownloadDocx} disabled={!r}
+              className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40">
+              📥 Download as Word
+            </button>
+            <button onClick={onClose} aria-label="close"
+              className="text-gray-400 hover:text-gray-700 text-xl leading-none px-2">×</button>
+          </div>
+        </div>
+
+        <div className="overflow-y-auto">
+          {loading && <div className="p-8 text-center text-gray-500">Aggregating events…</div>}
+          {error && <div className="p-8 text-center text-rose-600">Failed to load report: {error}</div>}
+          {r && (
+            <>
+              <FRSection title="Key Findings" open>
+                {r.overview ? <p className="leading-relaxed">{r.overview}</p>
+                  : <p className="italic text-gray-400">No overview.</p>}
+                {r.topics_covered.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {r.topics_covered.map((t, i) => (
+                      <span key={i} className="px-2 py-0.5 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200">{t}</span>
+                    ))}
+                  </div>
+                )}
+              </FRSection>
+
+              <FRSection title="Observed Facts" count={r.all_observed_facts.length} open>
+                {r.all_observed_facts.length > 0 ? (
+                  <ol className="list-decimal list-inside space-y-1">
+                    {r.all_observed_facts.map((f, i) => <li key={i}>{f}</li>)}
+                  </ol>
+                ) : <p className="italic text-gray-400">No observed facts.</p>}
+              </FRSection>
+
+              <FRSection title="Audio Transcript">
+                <div className="text-xs text-gray-500 mb-1">
+                  Quality: {r.audio_quality || "—"} · Language: {r.language_detected || "—"}
+                  {r.audio_events.length > 0 ? ` · ${r.audio_events.join(", ")}` : ""}
+                </div>
+                {r.audio_transcript_full
+                  ? <p className="whitespace-pre-wrap leading-relaxed">{r.audio_transcript_full}</p>
+                  : <p className="italic text-gray-400">No audio captured for this clip.</p>}
+              </FRSection>
+
+              <FRSection title="Timeline" count={r.timeline.length}>
+                {r.timeline.length > 0 ? (
+                  <table className="w-full text-xs border-collapse">
+                    <thead><tr className="bg-gray-50 text-gray-500">
+                      <th className="text-left p-1 border border-gray-200 w-16">Window</th>
+                      <th className="text-left p-1 border border-gray-200">Summary</th>
+                      <th className="text-left p-1 border border-gray-200 w-1/3">Key items</th>
+                    </tr></thead>
+                    <tbody>
+                      {r.timeline.map((w, i) => (
+                        <tr key={i}>
+                          <td className="p-1 border border-gray-200 font-mono">{w.window_sec}s</td>
+                          <td className="p-1 border border-gray-200">{w.summary || "—"}</td>
+                          <td className="p-1 border border-gray-200 text-gray-500">{(w.key_items || []).join(", ") || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <p className="italic text-gray-400">No timeline windows.</p>}
+              </FRSection>
+
+              <FRSection title="Value Updates" count={r.value_updates.length}>
+                {r.value_updates.length > 0 ? (
+                  <ul className="space-y-1">
+                    {r.value_updates.map((v, i) => (
+                      <li key={i}><strong>{v.label}</strong>: {v.values.map(x => x.value).join(" → ")}
+                        {v.change_count > 1 ? <span className="text-gray-400"> ({v.change_count} changes)</span> : null}</li>
+                    ))}
+                  </ul>
+                ) : <p className="italic text-gray-400">No metric value changes detected.</p>}
+              </FRSection>
+
+              <FRSection title="Visual Content">
+                {r.visual_summary.headlines.length > 0 && (
+                  <div className="mb-2"><div className="text-xs text-gray-500 uppercase">Headlines</div>
+                    <ul className="list-disc list-inside">{r.visual_summary.headlines.map((h, i) => <li key={i}>{h}</li>)}</ul></div>
+                )}
+                <div className="flex flex-wrap gap-1">
+                  {r.visual_summary.visual_objects.map((o, i) =>
+                    <span key={i} className="px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700 border border-slate-200">{o}</span>)}
+                </div>
+                <div className="text-xs text-gray-500 mt-2">
+                  Panels: {r.visual_summary.panels_detected_count} · Broadcast: {r.visual_summary.broadcast_mode ? "yes" : "no"}
+                </div>
+              </FRSection>
+
+              <FRSection title="Key Terms Captured" count={r.all_ocr_text.length}>
+                <p className="text-xs text-gray-500 mb-1">Filtered OCR — numbers, prices, names, headlines.</p>
+                <p className="text-[11px] text-gray-700 leading-relaxed break-words">{r.all_ocr_text.join(" · ") || "—"}</p>
+              </FRSection>
+
+              <FRSection title="Technical OCR Reference (raw)" count={r.ocr_appendix_full.length}>
+                <p className="text-xs italic text-gray-400 mb-1">For technical verification only — raw items that did not pass quality filtering.</p>
+                <p className="text-[10px] text-gray-400 leading-snug break-words">{r.ocr_appendix_full.join(" · ") || "—"}</p>
+              </FRSection>
+
+              <div className="px-4 py-2 text-[10px] text-gray-400 border-t border-gray-100">
+                schema {r.metadata.schema_version} · recall est {r.metrics.recall_estimate_avg} ·
+                OCR {r.metrics.total_ocr_items_captured} captured · generated {r.metadata.generated_at?.slice(0, 19)}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function LifelogPage() {
   const [userId, setUserId] = useState(1);
   const [date, setDate] = useState<string>(new Date().toISOString().slice(0, 10));
@@ -1268,6 +1451,11 @@ export default function LifelogPage() {
   // button again closes it.
   type PanelKind = "ask" | "details" | "video" | "audio" | "combined";
   const [openPanel, setOpenPanel] = useState<{ id: number; kind: PanelKind } | null>(null);
+  // Full Report modal (keyed by source_video; scoped by the source dropdown).
+  const [fullReportSource, setFullReportSource] = useState<string | null>(null);
+  const [fullReport, setFullReport] = useState<FullReport | null>(null);
+  const [fullReportLoading, setFullReportLoading] = useState(false);
+  const [fullReportError, setFullReportError] = useState<string | null>(null);
   const togglePanel = (id: number, kind: PanelKind) => {
     setOpenPanel(prev => (prev && prev.id === id && prev.kind === kind ? null : { id, kind }));
   };
@@ -1353,6 +1541,34 @@ export default function LifelogPage() {
       })
       .finally(() => setLoading(false));
   }, [userId, date]);
+
+  // Full Report: fetch the consolidated aggregation when a video is selected.
+  // Scoped by the source dropdown (specific arm, or all arms when "all").
+  useEffect(() => {
+    if (!fullReportSource) return;
+    setFullReportLoading(true);
+    setFullReportError(null);
+    setFullReport(null);
+    const p = new URLSearchParams();
+    p.set("source_video", fullReportSource);
+    p.set("user_id", String(userId));
+    if (sourceFilter !== "all") p.set("source_model", sourceFilter);
+    fetch(`${API_BASE}/lifelog/full-report?${p.toString()}`)
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then((d) => { if (d.error) throw new Error(d.error); setFullReport(d); })
+      .catch(e => setFullReportError(String(e)))
+      .finally(() => setFullReportLoading(false));
+  }, [fullReportSource, userId, sourceFilter]);
+
+  function handleDownloadDocx() {
+    if (!fullReportSource) return;
+    const p = new URLSearchParams();
+    p.set("source_video", fullReportSource);
+    p.set("user_id", String(userId));
+    if (sourceFilter !== "all") p.set("source_model", sourceFilter);
+    // server sets Content-Disposition: attachment → browser downloads
+    window.location.href = `${API_BASE}/lifelog/full-report.docx?${p.toString()}`;
+  }
 
   // Apply client-side filters
   const filtered = useMemo(() => rows.filter(r =>
@@ -1637,6 +1853,15 @@ export default function LifelogPage() {
                     >
                       🧠 Combined{combinedBadgeMark(r)}
                     </button>
+                    {r.source_video && (
+                      <button
+                        onClick={() => setFullReportSource(r.source_video!)}
+                        className="text-xs px-2 py-1 rounded border transition-colors bg-white text-blue-700 border-blue-300 hover:bg-blue-50 font-medium"
+                        title="Consolidated report across all events for this video"
+                      >
+                        📄 Full Report
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1718,6 +1943,16 @@ export default function LifelogPage() {
         <span>© 2025 Triple-H Co., Ltd. All rights reserved.</span>
         <span>Daily Lifelog v1.0 · reads <code>lifelog_event</code> table</span>
       </footer>
+
+      {fullReportSource && (
+        <FullReportModal
+          report={fullReport}
+          loading={fullReportLoading}
+          error={fullReportError}
+          onClose={() => { setFullReportSource(null); setFullReport(null); setFullReportError(null); }}
+          onDownloadDocx={handleDownloadDocx}
+        />
+      )}
     </div>
   );
 }
