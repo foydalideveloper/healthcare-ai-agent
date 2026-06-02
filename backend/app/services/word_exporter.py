@@ -27,6 +27,7 @@ PAGE_EVERY = 50             # page break cadence for long lists
 GREEN = RGBColor(0x1A, 0x7F, 0x37)
 RED = RGBColor(0xC0, 0x2B, 0x2B)
 MUTED = RGBColor(0x80, 0x80, 0x80)
+BLUE = RGBColor(0x1F, 0x4E, 0x79)  # audio-sourced rows (Value Updates source col)
 
 
 def _s(v) -> str:
@@ -130,6 +131,8 @@ def _add_title_page(doc, r):
         ("Duration", f"{r.get('duration_sec', 0)} s ({tr.get('start_sec', 0)}–{tr.get('end_sec', 0)} s)"),
         ("OCR items captured", str((r.get("metrics") or {}).get("total_ocr_items_captured", 0))),
         ("Avg recall estimate", f"{(r.get('metrics') or {}).get('recall_estimate_avg', 0)}"),
+        ("Audio facts extracted", str((r.get("metrics") or {}).get("audio_facts_extracted", 0))),
+        ("Audio-only mentions", str(len(r.get("audio_only_terms") or []))),
         ("Generated", _s((r.get("metadata") or {}).get("generated_at"))),
     ]
     t = _new_table(doc, ["Field", "Value"])
@@ -242,15 +245,29 @@ def _add_value_updates_section(doc, r):
     # "Times Observed" (not "Changes"): change_count counts sightings of the
     # value, so on noisy OCR a single snapshot reads as 1 — labeling it
     # "Changes" would falsely imply "changed once".
-    t = _new_table(doc, ["Label", "Values (in order)", "Times Observed"])
+    # v3.4: a 4th "Source" column attributes each row to Video (OCR) or Audio
+    # (transcript). Audio rows are blue; a claim_type, if present, shows as a
+    # small muted subtitle under the label. Plain "Audio"/"Video" text (not
+    # emoji) keeps rendering identical across MS Word and LibreOffice.
+    t = _new_table(doc, ["Label", "Values (in order)", "Times Observed", "Source"])
     for vu in vus[:SECTION_CAP]:
         cells = t.add_row().cells
-        _set_cell(cells[0], _s(vu.get("label")), bold=True)
+        is_audio = _s(vu.get("source")) == "audio"
+        # Label cell: bold label + optional claim_type subtitle line.
+        cells[0].text = ""
+        _set_run_fonts(cells[0].paragraphs[0].add_run(_s(vu.get("label"))),
+                       size=10, bold=True, color=(BLUE if is_audio else None))
+        claim = _s(vu.get("claim_type"))
+        if claim:
+            sub = cells[0].add_paragraph()
+            _set_run_fonts(sub.add_run(claim), size=8, italic=True, color=MUTED)
         vals = vu.get("values") or []
         seq = " → ".join(_s(v.get("value")) for v in vals if isinstance(v, dict)) or "—"
         color = _direction_color(vals) if (vu.get("change_count") or 0) > 1 else None
         _set_cell(cells[1], seq, color=color)
         _set_cell(cells[2], str(vu.get("change_count", len(vals))))
+        _set_cell(cells[3], "Audio" if is_audio else "Video",
+                  bold=is_audio, color=(BLUE if is_audio else None))
 
 
 def _add_visual_summary_section(doc, r):
@@ -295,6 +312,19 @@ def _add_key_terms_section(doc, r):
         _para(doc, " · ".join(_s(x) for x in seg), size=10)
     if extra:
         _para(doc, f"... and {extra} more", italic=True)
+
+    # v3.4: audio-only mentions — values spoken in the transcript but never
+    # rendered on screen as OCR text. Hidden entirely when the list is empty.
+    audio_only = r.get("audio_only_terms") or []
+    if audio_only:
+        doc.add_paragraph()
+        _para(doc, f"Audio-only Mentions ({len(audio_only)})", bold=True)
+        _para(doc, "Items mentioned in the audio transcript but not visible on "
+                   "screen as text.", size=9, italic=True)
+        ao_items, ao_extra = _capped(audio_only)
+        _para(doc, " · ".join(_s(x) for x in ao_items), size=10)
+        if ao_extra:
+            _para(doc, f"... and {ao_extra} more", italic=True)
 
 
 def _add_technical_ocr_appendix(doc, r):
