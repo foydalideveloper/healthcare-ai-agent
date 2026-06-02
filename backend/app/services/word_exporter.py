@@ -129,7 +129,6 @@ def _add_title_page(doc, r):
         ("Source model(s)", _s(r.get("source_model"))),
         ("Duration", f"{r.get('duration_sec', 0)} s ({tr.get('start_sec', 0)}–{tr.get('end_sec', 0)} s)"),
         ("OCR items captured", str((r.get("metrics") or {}).get("total_ocr_items_captured", 0))),
-        ("Detailed observations", str((r.get("metrics") or {}).get("total_enumerated_observations", 0))),
         ("Avg recall estimate", f"{(r.get('metrics') or {}).get('recall_estimate_avg', 0)}"),
         ("Generated", _s((r.get("metadata") or {}).get("generated_at"))),
     ]

@@ -115,6 +115,12 @@ _FILLER_PATTERNS = [
     re.compile(r"\b(lighting|room lighting|the room|the lighting) (is|remains|stays) "
                r"(consistent|stable|unchanged|dim|bright|the same)\b", re.I),
     re.compile(r"\bfan is (still )?(running|on|spinning|active)\b", re.I),
+    # v3.3 polish round 2 — escaped-filler patterns:
+    re.compile(r"\bis finishing\b", re.I),
+    re.compile(r"\bhas been about\b", re.I),
+    re.compile(r"\bthe overall scene is\b", re.I),
+    re.compile(r"\bvoice is clear\b", re.I),
+    re.compile(r"\bfocused on\b", re.I),
 ]
 
 
@@ -128,7 +134,7 @@ def _is_substantive_fact(f: str) -> bool:
     return not any(p.search(f) for p in _FILLER_PATTERNS)
 
 
-def _semantic_dedup(items: list[str], thresh: float = 0.8) -> list[str]:
+def _semantic_dedup(items: list[str], thresh: float = 0.7) -> list[str]:
     """Collapse near-duplicate sentences (reworded triplicates). Two items are
     duplicates if one normalized form contains the other (>=8 chars) OR their
     difflib ratio >= thresh. Keeps the most SPECIFIC (longest) of a cluster,
@@ -154,9 +160,9 @@ def _semantic_dedup(items: list[str], thresh: float = 0.8) -> list[str]:
             # same entity/content but reword the rest ("source is KBS" 3 ways) —
             # gated to short facts so longer specific facts aren't over-merged.
             jac = len(tk & kept_tok[i]) / max(1, len(tk | kept_tok[i]))
-            short_both = len(n) <= 70 and len(kn) <= 70
+            short_both = len(n) <= 90 and len(kn) <= 90
             if (len(shorter) >= 8 and shorter in longer) or ratio >= thresh \
-               or (short_both and jac >= 0.55):
+               or (short_both and jac >= 0.5):
                 hit = i
                 break
         if hit >= 0:
@@ -168,6 +174,31 @@ def _semantic_dedup(items: list[str], thresh: float = 0.8) -> list[str]:
             kept.append(it)
             kept_norm.append(n)
             kept_tok.append(tk)
+    return kept
+
+
+def _dedup_objects(items: list[str], head_merge: bool = False) -> list[str]:
+    """Dedup visual objects / UI elements: case-insensitive exact, plus drop any
+    item that is a substring of a kept item (or vice versa) — 'news anchor' vs
+    'news anchor (on screen)'. With head_merge, also merge items sharing the same
+    head noun (last token, >=3 chars) — 'desk fan' vs 'electric fan'. Keeps the
+    more specific (longer) wording."""
+    def _head(s: str) -> str:
+        toks = re.findall(r"[a-z0-9가-힣]+", s.lower())
+        return toks[-1] if toks else ""
+    kept: list[str] = []
+    for it in _dedup_lower(items):
+        il = it.lower()
+        merged = False
+        for i, k in enumerate(kept):
+            kl = k.lower()
+            if il in kl or kl in il or (head_merge and len(_head(it)) >= 3 and _head(it) == _head(k)):
+                if len(it) > len(kept[i]):
+                    kept[i] = it
+                merged = True
+                break
+        if not merged:
+            kept.append(it)
     return kept
 
 
@@ -222,15 +253,35 @@ def _merge_timeline(events: list[dict]) -> list[dict]:
         end = float(nums[1]) if len(nums) > 1 else start
         return (start, end)  # tie-break by end so 0-5 sorts before 0-15
 
-    out = []
+    windows = []
     for key in sorted(by_window, key=_bounds):
         slot = by_window[key]
-        out.append({
+        windows.append({
             "window_sec": key,
             "summary": " | ".join(_dedup_exact(slot["_summaries"])),
             "key_items": _dedup_exact(slot["key_items"]),
         })
-    return out
+
+    # Collapse overlapping windows (e.g. chunk-1's "0-5" inside chunk-0's
+    # "0-15"): merge the smaller into the larger so readers see clean,
+    # non-overlapping windows. Process larger windows first as anchors.
+    out: list[dict] = []
+    for w in sorted(windows, key=lambda x: (_bounds(x["window_sec"])[1] - _bounds(x["window_sec"])[0]), reverse=True):
+        ws, we = _bounds(w["window_sec"])
+        host = None
+        for h in out:
+            hs, he = _bounds(h["window_sec"])
+            if ws >= hs and we <= he and not (ws == hs and we == he):  # strictly contained
+                host = h
+                break
+        if host:
+            if w["summary"]:
+                host["summary"] = " | ".join(_dedup_exact(
+                    [s for s in [host["summary"], w["summary"]] if s]))
+            host["key_items"] = _dedup_exact(host["key_items"] + w["key_items"])
+        else:
+            out.append(w)
+    return sorted(out, key=lambda x: _bounds(x["window_sec"]))
 
 
 def _merge_value_updates(events: list[dict]) -> list[dict]:
@@ -284,8 +335,8 @@ def _build_visual_summary(events: list[dict]) -> dict:
         if (ve.get("broadcast_mode") is True) or (e.get("broadcast_mode") is True):
             broadcast = True
     return {
-        "visual_objects": _dedup_lower(visual_objects),
-        "ui_elements": _dedup_lower(ui_elements),
+        "visual_objects": _dedup_objects(visual_objects, head_merge=True),
+        "ui_elements": _dedup_objects(ui_elements),
         "charts_detected": _dedup_lower(charts),
         "headlines": _dedup_exact(headlines),
         "panels_detected_count": panels_count,
@@ -355,12 +406,28 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
             overviews.append(w)
     overview = " ".join(_dedup_exact(overviews))
 
-    topics_covered = _dedup_exact([_as_str(e.get("topic")).strip() for e in events])
+    # Topics: drop weak filler topics ("News conclusion." etc.).
+    _topic_filler = re.compile(r"\b(conclusion|wrap.?up|ending|end of (the )?(broadcast|report|news))\b", re.I)
+    topics_covered = [t for t in _dedup_exact([_as_str(e.get("topic")).strip() for e in events])
+                      if not _topic_filler.search(t)]
 
-    # v3.3 polish: exact-dedup → drop filler → collapse reworded near-duplicates.
+    # Visual summary computed early so observed_facts can drop headline-fragment
+    # facts ("The text 'X' is visible." where X is already in a headline).
+    visual_summary = _build_visual_summary(events)
+    _headlines_norm = [_norm_ocr(h) for h in visual_summary["headlines"] if _norm_ocr(h)]
+
+    def _is_headline_fragment(fact: str) -> bool:
+        m = re.search(r"['\"`](.+?)['\"`]", fact)
+        if not m:
+            return False
+        q = _norm_ocr(m.group(1))
+        return len(q) >= 4 and any(q in h for h in _headlines_norm)
+
+    # v3.3 polish: exact-dedup → drop filler + headline-fragments → collapse
+    # reworded near-duplicates.
     _facts = [f for f in _dedup_exact(
         [f for e in events for f in _as_list(e.get("observed_facts"))])
-        if _is_substantive_fact(f)]
+        if _is_substantive_fact(f) and not _is_headline_fragment(f)]
     all_observed_facts = _semantic_dedup(_facts)
     all_enumerated = _semantic_dedup(_dedup_exact(
         [o for e in events for o in _as_list(e.get("enumerated_observations"))]))
@@ -399,7 +466,7 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
 
     timeline = _merge_timeline(events)
     value_updates = _merge_value_updates(events)
-    visual_summary = _build_visual_summary(events)
+    # visual_summary already computed above (needed for headline-fragment filter).
 
     # recall_estimate: prefer combined_analysis.recall_estimate, fall back to column.
     recalls = []
