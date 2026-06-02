@@ -649,6 +649,17 @@ def _build_user_prompt(transcript_text: str = "", ocr_text: str = "",
             "the change in `combined_analysis.what_is_happening`."
         )
         parts.append("\n".join(lines))
+    else:
+        # No pre-detected changes (noisy OCR can't pair labels<->values). Still
+        # ask the VLM to report any value change it sees directly in the frames,
+        # so value_updates isn't silently empty on broadcasts with live tickers.
+        parts.append(
+            "## Value updates\n"
+            "If any on-screen metric, index, stock price, or FX rate shows DIFFERENT "
+            "values at different points in this clip (a ticker ticking up/down, a "
+            "price that updates), report each in `combined_analysis.value_updates` as "
+            "{label, values:[{value, timestamp_sec}], change_count}. Empty list if none."
+        )
     if transcript_text:
         parts.append(f'Audio transcript for this clip: "{transcript_text}"')
     parts.append(LIFELOG_PROMPT)
@@ -1557,6 +1568,22 @@ def _process_chunk(i: int, video_path: Path, chunk_sec: int, duration: float,
             log_lines.append(f"    [sub-chunks] failed: {type(e).__name__}: {str(e)[:120]}")
             ocr_by_window = []
 
+    # Pipeline-built timeline from the sub-windows. gemma often DROPS
+    # combined_analysis.timeline on dense chunks; this guarantees a
+    # window-by-window timeline grounded in the OCR (key_items quality-filtered).
+    pipeline_timeline: list[dict] = []
+    try:
+        from ocr_quality_filter import is_meaningful_ocr_item as _is_meaningful
+    except Exception:
+        _is_meaningful = lambda t, c=1.0: len((t or "").strip()) >= 4
+    for w in ocr_by_window:
+        key_items = [it for it in (w.get("items") or []) if _is_meaningful(it)][:8]
+        pipeline_timeline.append({
+            "window_sec": w.get("window_sec", "?"),
+            "summary": "",
+            "key_items": key_items,
+        })
+
     log_lines.append(f"  chunk {i+1}  t={start:.0f}-{end:.0f}s  "
                      f"{len(frames)} vlm-frames  transcript={len(ts_text)} chars  "
                      f"ocr={len(ocr_text)} chars")
@@ -1646,6 +1673,26 @@ def _process_chunk(i: int, video_path: Path, chunk_sec: int, duration: float,
             v3_combined = {}
         if value_updates and not v3_combined.get("value_updates"):
             v3_combined["value_updates"] = value_updates
+        # Timeline: gemma frequently drops combined_analysis.timeline on dense
+        # chunks. When the VLM's timeline is missing or has fewer windows than
+        # the pipeline sub-windows, rebuild it from pipeline_timeline (grafting
+        # any VLM-written per-window summaries by window key).
+        if pipeline_timeline:
+            vlm_tl = v3_combined.get("timeline")
+            if not isinstance(vlm_tl, list) or len(vlm_tl) < len(pipeline_timeline):
+                vlm_by_win = {}
+                if isinstance(vlm_tl, list):
+                    for w in vlm_tl:
+                        if isinstance(w, dict) and w.get("window_sec"):
+                            vlm_by_win[str(w["window_sec"])] = w
+                v3_combined["timeline"] = [
+                    {
+                        "window_sec": w["window_sec"],
+                        "summary": (vlm_by_win.get(w["window_sec"], {}).get("summary") or "").strip(),
+                        "key_items": w["key_items"],
+                    }
+                    for w in pipeline_timeline
+                ]
         # Audio: inject the actual Whisper transcript as GROUND TRUTH. The
         # prompt asks the VLM to echo it, but local arms routinely drop or
         # summarize it (and with no transcript they hallucinate
