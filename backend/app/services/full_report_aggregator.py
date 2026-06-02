@@ -33,8 +33,16 @@ from glasses_watcher.ocr_quality_filter import (  # noqa: E402
     filter_ocr_items,
     filter_enumerated_observations,
 )
+# Audio-OCR cross-reference layer (v3.4). Pure stdlib module, sibling in
+# app/services — no pipeline imports pulled in.
+from app.services.audio_fact_extractor import (  # noqa: E402
+    extract_audio_facts,
+    cross_reference_with_ocr,
+    promote_to_value_updates,
+    extract_audio_only_terms,
+)
 
-SCHEMA_VERSION = "v3.3"
+SCHEMA_VERSION = "v3.4"  # v3.4: audio-OCR cross-reference layer (additive)
 _QUALITY_RANK = {"poor": 0, "partial": 1, "good": 2}  # for "worst quality"
 
 
@@ -356,6 +364,7 @@ def _empty_report(generated_at: str | None = None) -> dict:
         "audio_transcript_full": "", "audio_quality": "", "audio_events": [],
         "language_detected": "",
         "timeline": [], "value_updates": [],
+        "audio_only_terms": [],
         "visual_summary": {
             "visual_objects": [], "ui_elements": [], "charts_detected": [],
             "headlines": [], "panels_detected_count": 0, "broadcast_mode": False,
@@ -365,6 +374,8 @@ def _empty_report(generated_at: str | None = None) -> dict:
             "recall_estimate_avg": 0.0, "frame_sampling_rate_used": 0,
             "meaningful_ocr_items": 0, "filtered_ocr_items": 0,
             "meaningful_observations": 0, "filtered_observations": 0,
+            "audio_facts_extracted": 0, "audio_facts_cross_referenced": 0,
+            "audio_only_facts": 0,
         },
         "metadata": {
             "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
@@ -492,7 +503,7 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
     ocr_meaningful, ocr_filtered = filter_ocr_items(all_ocr_text)
     enum_meaningful, enum_dropped = filter_enumerated_observations(all_enumerated)
 
-    return {
+    report = {
         "source_video": source_video,
         "source_model": source_model,
         "event_count": len(events),
@@ -528,3 +539,23 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
             "schema_version": SCHEMA_VERSION,
         },
     }
+
+    # === Audio-OCR cross-reference layer (v3.4) ============================
+    # PURELY ADDITIVE post-processing: parse the (already-built) transcript for
+    # structured facts, cross-reference against the OCR text, then ADD audio-
+    # derived value_updates (source="audio") + an audio_only_terms list. The
+    # existing OCR-derived value_updates are tagged source="video" but otherwise
+    # untouched. Nothing existing is removed or renamed. Empty/garbled transcript
+    # degrades to no-op (audio_facts == []).
+    transcript = report.get("audio_transcript_full", "")
+    audio_facts = extract_audio_facts(transcript)
+    ocr_items_for_xref = report.get("all_ocr_text", []) + report.get("ocr_appendix_full", [])
+    also_in_ocr, audio_only_facts = cross_reference_with_ocr(audio_facts, ocr_items_for_xref)
+
+    report["value_updates"] = promote_to_value_updates(audio_facts, report.get("value_updates", []))
+    report["audio_only_terms"] = extract_audio_only_terms(audio_only_facts)
+    report["metrics"]["audio_facts_extracted"] = len(audio_facts)
+    report["metrics"]["audio_facts_cross_referenced"] = len(also_in_ocr)
+    report["metrics"]["audio_only_facts"] = len(audio_only_facts)
+
+    return report
