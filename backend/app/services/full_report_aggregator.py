@@ -100,6 +100,77 @@ def _dedup_lower(items: list[str]) -> list[str]:
     return out
 
 
+# v3.3 polish: drop low-information "filler" facts (generic ambient state with
+# no specific value). Facts containing a number/price/% are always kept.
+_FILLER_PATTERNS = [
+    re.compile(r"\bis still\b", re.I),
+    re.compile(r"\bare still\b", re.I),
+    re.compile(r"\bstill (display|run|show|on\b|active|present|visible|spinning)", re.I),
+    re.compile(r"\bcontinues?\b", re.I),
+    re.compile(r"\bremains? (consistent|unchanged|the same|stable|on|active)\b", re.I),
+    re.compile(r"\bnearing (its )?end\b", re.I),
+    re.compile(r"\b(concluding|wrapping up|coming to an end|about to end|drawing to a close)\b", re.I),
+    re.compile(r"\bis being (shown|displayed|played)\b", re.I),
+    re.compile(r"\b(user|viewer|person) is (observing|watching|looking at|viewing)\b", re.I),
+    re.compile(r"\b(lighting|room lighting|the room|the lighting) (is|remains|stays) "
+               r"(consistent|stable|unchanged|dim|bright|the same)\b", re.I),
+    re.compile(r"\bfan is (still )?(running|on|spinning|active)\b", re.I),
+]
+
+
+def _is_substantive_fact(f: str) -> bool:
+    """Keep facts with a value/number; drop generic ambient-state filler."""
+    f = (f or "").strip()
+    if not f:
+        return False
+    if re.search(r"\d", f):  # prices / %, dates, counts → always substantive
+        return True
+    return not any(p.search(f) for p in _FILLER_PATTERNS)
+
+
+def _semantic_dedup(items: list[str], thresh: float = 0.8) -> list[str]:
+    """Collapse near-duplicate sentences (reworded triplicates). Two items are
+    duplicates if one normalized form contains the other (>=8 chars) OR their
+    difflib ratio >= thresh. Keeps the most SPECIFIC (longest) of a cluster,
+    preserving first-seen order."""
+    from difflib import SequenceMatcher
+
+    def _toks(s: str) -> set:
+        return set(re.findall(r"[a-z0-9가-힣]+", s.lower()))
+
+    kept: list[str] = []
+    kept_norm: list[str] = []
+    kept_tok: list[set] = []
+    for it in items:
+        n = _norm_ocr(it)
+        if not n:
+            continue
+        tk = _toks(it)
+        hit = -1
+        for i, kn in enumerate(kept_norm):
+            shorter, longer = (n, kn) if len(n) <= len(kn) else (kn, n)
+            ratio = SequenceMatcher(None, n, kn).ratio()
+            # token overlap (Jaccard) catches SHORT restatements that share the
+            # same entity/content but reword the rest ("source is KBS" 3 ways) —
+            # gated to short facts so longer specific facts aren't over-merged.
+            jac = len(tk & kept_tok[i]) / max(1, len(tk | kept_tok[i]))
+            short_both = len(n) <= 70 and len(kn) <= 70
+            if (len(shorter) >= 8 and shorter in longer) or ratio >= thresh \
+               or (short_both and jac >= 0.55):
+                hit = i
+                break
+        if hit >= 0:
+            if len(it) > len(kept[hit]):  # prefer the more specific wording
+                kept[hit] = it
+                kept_norm[hit] = n
+                kept_tok[hit] = tk
+        else:
+            kept.append(it)
+            kept_norm.append(n)
+            kept_tok.append(tk)
+    return kept
+
+
 def _worst_quality(qs: list[str]) -> str:
     ranked = [q for q in qs if q in _QUALITY_RANK]
     if not ranked:
@@ -145,12 +216,14 @@ def _merge_timeline(events: list[dict]) -> list[dict]:
                 slot["_summaries"].append(summ)
             slot["key_items"].extend(_as_str(x) for x in _as_list(w.get("key_items")))
 
-    def _start(win: str) -> float:
-        m = re.match(r"\s*(\d+(?:\.\d+)?)", win)
-        return float(m.group(1)) if m else 0.0
+    def _bounds(win: str) -> tuple:
+        nums = re.findall(r"\d+(?:\.\d+)?", win)
+        start = float(nums[0]) if nums else 0.0
+        end = float(nums[1]) if len(nums) > 1 else start
+        return (start, end)  # tie-break by end so 0-5 sorts before 0-15
 
     out = []
-    for key in sorted(by_window, key=_start):
+    for key in sorted(by_window, key=_bounds):
         slot = by_window[key]
         out.append({
             "window_sec": key,
@@ -212,7 +285,7 @@ def _build_visual_summary(events: list[dict]) -> dict:
             broadcast = True
     return {
         "visual_objects": _dedup_lower(visual_objects),
-        "ui_elements": _dedup_exact(ui_elements),
+        "ui_elements": _dedup_lower(ui_elements),
         "charts_detected": _dedup_lower(charts),
         "headlines": _dedup_exact(headlines),
         "panels_detected_count": panels_count,
@@ -284,10 +357,13 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
 
     topics_covered = _dedup_exact([_as_str(e.get("topic")).strip() for e in events])
 
-    all_observed_facts = _dedup_exact(
+    # v3.3 polish: exact-dedup → drop filler → collapse reworded near-duplicates.
+    _facts = [f for f in _dedup_exact(
         [f for e in events for f in _as_list(e.get("observed_facts"))])
-    all_enumerated = _dedup_exact(
-        [o for e in events for o in _as_list(e.get("enumerated_observations"))])
+        if _is_substantive_fact(f)]
+    all_observed_facts = _semantic_dedup(_facts)
+    all_enumerated = _semantic_dedup(_dedup_exact(
+        [o for e in events for o in _as_list(e.get("enumerated_observations"))]))
 
     # OCR: union of video_extraction.ocr_text_full + the flat ocr_text_full string.
     ocr_items: list[str] = []

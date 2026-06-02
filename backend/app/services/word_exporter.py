@@ -203,11 +203,16 @@ def _add_timeline_section(doc, r):
         _para(doc, "No timeline windows captured.", italic=True)
         return
     t = _new_table(doc, ["Window (s)", "Summary", "Key items"])
-    for w in tl[:SECTION_CAP]:
+    # Sort chronologically by window start (tie-break by end) — defensive; the
+    # aggregator already sorts, but guard against any unsorted input.
+    def _bounds(w):
+        nums = re.findall(r"\d+(?:\.\d+)?", _s(w.get("window_sec")))
+        return (float(nums[0]) if nums else 0.0, float(nums[1]) if len(nums) > 1 else 0.0)
+    for w in sorted(tl[:SECTION_CAP], key=_bounds):
         cells = t.add_row().cells
-        _set_cell(cells[0], _s(w.get("window_sec")), bold=True)
-        _set_cell(cells[1], _s(w.get("summary")))
-        _set_cell(cells[2], ", ".join(_s(x) for x in (w.get("key_items") or [])))
+        _set_cell(cells[0], _s(w.get("window_sec")) or "—", bold=True)
+        _set_cell(cells[1], _s(w.get("summary")) or "—")
+        _set_cell(cells[2], ", ".join(_s(x) for x in (w.get("key_items") or [])) or "—")
 
 
 def _direction_color(values):
@@ -235,12 +240,15 @@ def _add_value_updates_section(doc, r):
     if not vus:
         _para(doc, "No metric value changes detected.", italic=True)
         return
-    t = _new_table(doc, ["Label", "Values (in order)", "Changes"])
+    # "Times Observed" (not "Changes"): change_count counts sightings of the
+    # value, so on noisy OCR a single snapshot reads as 1 — labeling it
+    # "Changes" would falsely imply "changed once".
+    t = _new_table(doc, ["Label", "Values (in order)", "Times Observed"])
     for vu in vus[:SECTION_CAP]:
         cells = t.add_row().cells
         _set_cell(cells[0], _s(vu.get("label")), bold=True)
         vals = vu.get("values") or []
-        seq = " → ".join(_s(v.get("value")) for v in vals if isinstance(v, dict))
+        seq = " → ".join(_s(v.get("value")) for v in vals if isinstance(v, dict)) or "—"
         color = _direction_color(vals) if (vu.get("change_count") or 0) > 1 else None
         _set_cell(cells[1], seq, color=color)
         _set_cell(cells[2], str(vu.get("change_count", len(vals))))
