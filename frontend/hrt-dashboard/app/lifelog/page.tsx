@@ -1227,6 +1227,9 @@ const SOURCE_BADGE: Record<string, { label: string; cls: string }> = {
   llama_4_maverick:               { label: "Llama 4 Maverick", cls: "bg-emerald-100 text-emerald-700 border-emerald-200" }, // legacy
   // ── Gemini 2.5 Pro ──
   gemini_2_5_pro:         { label: "Gemini 2.5 Pro", cls: "bg-amber-100 text-amber-700 border-amber-200" },
+  // ── Gemini 3.x (new arms) ──
+  gemini_3_1_pro_preview: { label: "Gemini 3.1 Pro Preview", cls: "bg-orange-100 text-orange-700 border-orange-200" },
+  gemini_3_5_flash:       { label: "Gemini 3.5 Flash", cls: "bg-cyan-100 text-cyan-700 border-cyan-200" },
   // ── Merged ──
   merged:                 { label: "Merged", cls: "bg-gray-100 text-gray-700 border-gray-200" },
 };
@@ -1238,6 +1241,8 @@ const SELECTABLE_SOURCES = [
   "qwen3_5_397b_a17b",
   "llama_4_maverick_17b_128e_inst",
   "gemini_2_5_pro",
+  "gemini_3_1_pro_preview",
+  "gemini_3_5_flash",
 ] as const;
 type SelectableSource = typeof SELECTABLE_SOURCES[number];
 
