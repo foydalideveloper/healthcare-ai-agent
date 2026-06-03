@@ -1132,6 +1132,102 @@ GEMINI_MODEL_DEFAULT = "gemini-3.1-pro"
 GEMINI_TIMEOUT_SEC = 120
 GEMINI_RETRIES = 1
 
+# ============================================================================
+# Gemini-ONLY prompt extension (v3.3-gemini-expanded).
+#
+# Gemini models default to overly-concise observed_facts (18-19 vs Gemma's 49).
+# This addendum instructs Gemini to DECOMPOSE what it already sees into more
+# granular facts WITHOUT lowering the quality bar. It is appended to the user
+# prompt INSIDE call_gemini_lifelog ONLY — LIFELOG_PROMPT, _build_user_prompt,
+# _GEMMA_SYSTEM_INSTRUCTION and the gemma/qwen/llama callers are untouched.
+# Applies to all 3 Gemini arms (2.5 Pro / 3.1 Pro Preview / 3.5 Flash) since
+# they share this caller.
+# ============================================================================
+GEMINI_FACT_EXPANSION_ADDENDUM = """
+
+## ADDITIONAL INSTRUCTIONS FOR observed_facts EXPANSION
+
+You tend toward conciseness — but for this task, the user needs FULL DECOMPOSITION
+of what you see. Each granular observation deserves its own fact. Target: 40-60
+substantive observed_facts per event.
+
+**This is NOT a quality reduction.** Every fact must still follow the v3.3 rule:
+WHO/WHAT + RELATIONSHIP/VALUE. NO filler. NO "the news is on screen" without context.
+
+**The expansion is achieved by DECOMPOSING grouped observations into individual facts.**
+
+### Decomposition Rules (apply ALL that match)
+
+**Rule 1: Multi-value panels — one fact per value**
+WRONG (single grouped fact):
+  - "Hana Bank dealing room shows KOSPI 8,428.84, KOSDAQ 1,148.16, USD/KRW 1,500.40"
+RIGHT (separate facts per value):
+  - "Hana Bank dealing room screen displays KOSPI at 8,428.84."
+  - "Hana Bank dealing room screen displays KOSDAQ at 1,148.16."
+  - "Hana Bank dealing room screen displays USD/KRW at 1,500.40."
+  - "Hana Bank dealing room screen displays S&P 500 at 7,519.12 (+0.61%)."
+
+**Rule 2: Multi-stock boards — one fact per stock**
+WRONG: "The KRX board shows multiple stocks including Samsung, SK Hynix, etc."
+RIGHT:
+  - "KRX board shows 삼성전자 at 307,000 won, up 8,000 won."
+  - "KRX board shows SK하이닉스 at 2,243,000 won, up 191,000 won."
+  - "KRX board shows 현대차 at 681,000 won, down 8,000 won."
+
+**Rule 3: Each headline/text overlay = separate fact**
+For every Korean or English headline, news ticker, text overlay, banner, or
+chyron visible on screen, write a separate fact. Include the verbatim text in
+single quotes. Examples:
+  - "Headline reads '마이크론 19% 급등...시총 1조 달러 돌파' (Micron surges 19%, surpasses $1 trillion)."
+  - "Text overlay reads 'UBS Micron 목표 주가 $535 → $1,625 상향'."
+
+**Rule 4: Named entities — split identity from claims**
+For each named person, company, or institution: Fact A identifies them
+(name + affiliation/role); Fact B+ each specific claim made by or about them.
+  - "An analyst named 서상영 appears with the title 미래에셋증권 연구위원."
+  - "서상영 states that companies have extended contract periods from 3 to 5 years."
+
+**Rule 5: UI elements — each gets its own fact**
+For every UI element on screen, a separate fact with its location/description:
+  - "A sign language interpreter is overlaid in the bottom-right corner."
+  - "The KBS News logo appears in the top-right corner."
+  - "A line chart compares Samsung and SK Hynix price trends."
+
+**Rule 6: Cross-references — audio confirms or contradicts visual**
+When the transcript mentions something also visible on screen, write a
+cross-reference fact; likewise when audio says something NOT shown:
+  - "Audio confirms the visual: '시총 1조 달러 클럽' is both spoken and shown as a headline."
+  - "Audio mentions SK Hynix market cap of 1,600조 원, which is not visible as a numeric value on screen."
+
+**Rule 7: Scene/environment — each detail gets its own fact**
+Don't write "an office with a desk and a fan." Decompose:
+  - "The user watches the broadcast on a large wall-mounted television."
+  - "An electric fan is positioned to the left of the television."
+
+**Rule 8: Temporal / progression facts**
+Note how content evolves during the clip:
+  - "The broadcast cuts from a graphic to live NYSE trading-floor footage around the 30-second mark."
+
+### Target & Distribution (aim 40-60 facts/event)
+Financial data 8-15 · Headlines/overlays 5-10 · Named entities+claims 3-8 ·
+UI elements 5-10 · Scene/environment 4-8 · Audio↔video cross-refs 3-6 ·
+Temporal/progression 2-5.
+
+### Quality Bar — UNCHANGED
+Every fact MUST still: have a clear subject + value/relationship; be a verifiable
+observation (not interpretation); use specific numbers/text when visible; NOT be a
+near-duplicate; NOT be vague filler. If a category has nothing visible, SKIP it —
+do NOT pad to hit the count. But if a category HAS content and you're tempted to
+group it, DECOMPOSE instead.
+
+### Value Updates — KEEP CURRENT BEHAVIOR (CRITICAL)
+Your existing value_updates detection is excellent. When you see the same metric
+at two different values across frames (e.g. KOSPI at 8,228.70 in the main broadcast
+and KOSPI at 8,428.84 on the Hana Bank screen), track BOTH values as a multi-value
+update {label, values:[{value, timestamp_sec}], change_count}. This behavior is
+critical — keep it exactly as before.
+"""
+
 
 def _gemini_config() -> tuple[Optional[str], str]:
     """Return (api_key, model_id). Reads env first, then backend/.env."""
@@ -1173,6 +1269,10 @@ def call_gemini_lifelog(frames: list, transcript_text: str = "",
     prompt = _build_user_prompt(transcript_text, ocr_text,
                                 value_updates=value_updates,
                                 ocr_by_window=ocr_by_window)
+    # Gemini-ONLY: append the fact-expansion addendum so Gemini decomposes
+    # grouped observations into 40-60 granular facts. Other arms never see this
+    # (they call _build_user_prompt directly). LIFELOG_PROMPT is unchanged.
+    prompt = prompt + GEMINI_FACT_EXPANSION_ADDENDUM
 
     # _img_to_data_url returns "data:image/jpeg;base64,XXX" — Gemini wants
     # the raw base64 string with mime_type in a separate field.
