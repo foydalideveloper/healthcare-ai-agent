@@ -210,6 +210,9 @@ All of this is **committed** (see §8 for the exact last commit). Key files:
 
 ## 9. Next further plans
 
+**✅ Recently completed:**
+- **Aggregator-side absolute-value backfill — DONE (2026-06-04, commit `b7a5946`).** Implements the deferred path below, superseding the rejected "Rule 1a" prompt experiment (whose ❌ negative-result note stays intact as the "why we didn't go that direction" record). One file: `full_report_aggregator.py` (+80/−1). Adds 4 helpers (`_normalize_for_fact_dedup`, `_generate_facts_from_value_update`, `_is_fact_already_present`, `backfill_absolute_value_facts`) + integration at line 561 (AFTER the v3.4 audio-xref source tagging). **Base-value-only emission (Option 1)** — the second-value branch was dropped as redundant with the Value Updates "Y → Z" arrow notation. Two regex bugs caught & fixed during testing: (1) sentence-final period swallowed by the number regex (`8,228.70.` ≠ `8228.70`), (2) label robustness (`USD/KRW` ≡ `USD-KRW`, slash/hyphen/space-insensitive). Result: **+1 fact on Gemini 3.1 Pro** (KOSPI base added, 100% deterministic vs Rule 1a's 0/3), **+0 on Gemma** (dedup skips its natural facts), +0 on the empty edge case. Cross-arm (all 6 arms), no API cost. Multi-value tracking / audio_only_terms=4 / schema v3.4 all preserved.
+
 1. **Immediate:** ✅ DONE — user chose (A); v4 (49 facts) accepted as the shipped report. No further action on item 4.
 2. **Deferred (from `handoff_2026-06-02.md` §5 — not active):**
    - Date-entity dedup (3 date facts → 1; cosmetic, regression risk, deliberately skipped).
@@ -227,7 +230,7 @@ All of this is **committed** (see §8 for the exact last commit). Key files:
    - **Gemma decomposition (optional)** — if more Gemma facts are ever desired, the `GEMINI_FACT_EXPANSION_ADDENDUM` (or equivalent) could be applied to the Gemma prompt path. Currently NOT done — 49 is Gemma's design target and its v3.3 prompt is deliberately untouched. (added 2026-06-04.)
    - **3.5 Flash multi-value tracking** — Flash produces 0 cross-frame multi-value `value_updates` even with the same addendum that gives 2.5 Pro / 3.1 Pro 3 entries each. Likely a model-capability limitation (weaker cross-frame state tracking), not a prompt bug. Worth investigating if Flash becomes a primary arm. (added 2026-06-04.)
    - **Qwen / Llama 4 post-expansion empirical confirmation** — they were NOT re-run after gemini-fact-expansion. Provably unaffected (their prompt path is byte-identical; they never call the addendum), but no fresh run was done. (added 2026-06-04.)
-   - **Aggregator-side absolute-value backfill** — promote each `source='video'` `value_updates` entry into 1-2 `observed_facts` deterministically (e.g. "Index X at value Y", "Index X changed from Y to Z"). **Replaces the REJECTED Rule 1a prompt approach** (see the ❌ rejected-experiment box above — a prompt rule can't reliably force a specific absolute value; KOSPI base was 0/3). Implement at AGGREGATION time in `full_report_aggregator.py`, not via prompt. Cross-arm benefit (works for all 6 arms without per-prompt changes); 100% reliable, no API cost. Needs dedup vs model-emitted facts. Est. ~45-60 min. (added 2026-06-04.)
+   - ~~**Aggregator-side absolute-value backfill**~~ — ✅ **DONE 2026-06-04 in `b7a5946`** (see "Recently completed" at the top of §9). Base-value-only; cross-arm; deterministic; dedup-safe.
 3. **Recall:** stuck ~58% substring / **~88% fuzzy** (`recall_fuzzy` in `tests/test_recall_measure.py`). The substring metric is hostile; real capture ~88%. Ceiling is OCR read-quality + the metric — only addressable via off-limits higher-DPI / DBSCAN-eps.
 
 ---
