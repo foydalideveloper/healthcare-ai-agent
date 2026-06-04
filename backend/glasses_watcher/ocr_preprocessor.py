@@ -276,35 +276,52 @@ def detect_panels(text_boxes: list[dict],
     return panels
 
 
-def _upscale_factor_for(bw: int, bh: int) -> int:
+# C1 (2026-06-04, authorized OCR session): density override threshold. A LARGE
+# panel packing this many text boxes per 100k px^2 is treated as a dense small-
+# text board (Hana Bank multi-currency / KRX stock list) and promoted 2x -> 3x.
+# Calibrated on the KBS clip so the boards qualify but sparse large regions and
+# the wide single-row ticker do not.
+_DENSE_PANEL_BOXES_PER_100KPX = 2.0
+
+
+def _upscale_factor_for(bw: int, bh: int, box_count: int = 0) -> int:
     """Adaptive ROI upscale (Recall Fix a). Smaller panels get more zoom so
     tiny currency/ticker fonts (e.g. the Hana Bank board's 1,500.40 / 8,424.66)
-    become legible to PaddleOCR. Large panels stay at 2x (already readable).
+    become legible to PaddleOCR.
 
-        panel >= 600x400          -> 2x  (current behaviour)
+        panel >= 600x400          -> 2x  (3x if DENSE — see C1 below)
         300x200 <= panel < 600x400 -> 3x
         panel < 300x200            -> 4x
+
+    C1 density override: the "large == already readable" assumption fails for
+    dense small-text financial boards. When a large panel's box density exceeds
+    `_DENSE_PANEL_BOXES_PER_100KPX`, promote 2x -> 3x (not 4x — keep headroom).
+    `box_count` is the number of text boxes inside the panel; 0 (default) keeps
+    the original size-only behaviour for any caller that doesn't pass it.
     """
     if bw >= 600 and bh >= 400:
-        return 2
+        density = box_count / (max(1, bw * bh) / 100000.0)
+        return 3 if density >= _DENSE_PANEL_BOXES_PER_100KPX else 2
     if bw >= 300 and bh >= 200:
         return 3
     return 4
 
 
 def reocr_panel(model, img: "Image.Image",
-                bbox: tuple[int, int, int, int]) -> list[dict]:
+                bbox: tuple[int, int, int, int],
+                box_count: int = 0) -> list[dict]:
     """Crop the image to bbox, adaptively upscale, OCR, translate boxes back
     to the original frame's coordinate space. Upscale factor scales inversely
-    with panel size (see _upscale_factor_for); capped so the upscaled crop
-    width stays <= 4000px to bound GPU memory."""
+    with panel size and (C1) text density (see _upscale_factor_for); capped so
+    the upscaled crop width stays <= 4000px to bound GPU memory. `box_count` is
+    the number of text boxes inside the panel (0 = size-only legacy behaviour)."""
     x1, y1, x2, y2 = bbox
     if x2 <= x1 or y2 <= y1:
         return []
     crop = img.crop((x1, y1, x2, y2))
     if crop.width < 8 or crop.height < 8:
         return []
-    factor = _upscale_factor_for(x2 - x1, y2 - y1)
+    factor = _upscale_factor_for(x2 - x1, y2 - y1, box_count)
     # Cap upscaled width at 4000px (INTER_CUBIC-equivalent BICUBIC resize).
     factor = max(1, min(factor, 4000 // max(1, crop.width)))
     up = (crop.resize((crop.width * factor, crop.height * factor), Image.BICUBIC)
@@ -553,12 +570,23 @@ def extract_text_from_frames(
             try:
                 panels = detect_panels(boxes, (img.height, img.width))
                 if len(panels) >= 2:
+                    # C1: count text boxes whose center falls inside each panel so
+                    # _upscale_factor_for can promote dense large boards 2x -> 3x.
+                    def _boxes_in(p: tuple) -> int:
+                        px1, py1, px2, py2 = p
+                        return sum(
+                            1 for b in boxes
+                            if px1 <= (b["bbox"][0] + b["bbox"][2]) / 2 <= px2
+                            and py1 <= (b["bbox"][1] + b["bbox"][3]) / 2 <= py2
+                        )
+                    panel_counts = [_boxes_in(p) for p in panels]
                     panel_upscale_factors = [
-                        _upscale_factor_for(p[2] - p[0], p[3] - p[1]) for p in panels
+                        _upscale_factor_for(p[2] - p[0], p[3] - p[1], c)
+                        for p, c in zip(panels, panel_counts)
                     ]
                     existing_pairs = [(b["text"], (b["bbox"][1] + b["bbox"][3]) // 2) for b in boxes]
-                    for p in panels:
-                        extra = reocr_panel(model, img, p)
+                    for p, c in zip(panels, panel_counts):
+                        extra = reocr_panel(model, img, p, c)
                         for x in extra:
                             yc = (x["bbox"][1] + x["bbox"][3]) // 2
                             # Dedup: same text within +/- 30 px y-band = duplicate
