@@ -38,6 +38,25 @@ The ~25-fact spread between Flash (41) and 3.1 Pro (66) is each model's natural 
 
 **Baselines + post-expansion artifacts** (untracked test_data): `baseline_gemini_{3_1_pro_preview,3_5_flash}_pre_expansion.json`, `expansion_test_gemini_{3_5_flash,3_1_pro_preview}.json`.
 
+### ❌ REJECTED EXPERIMENT (2026-06-04): "Rule 1a" absolute-value prompt fix — DO NOT REPEAT
+
+**What was tried:** a one-sentence sub-rule ("Rule 1a") added to `GEMINI_FACT_EXPANSION_ADDENDUM` telling Gemini that when a metric shows BOTH an absolute value AND a change, emit TWO separate `observed_facts` (base + delta). Goal: get KOSPI's base value (8,228.70) into observed_facts (it was only emitting the +181.19 change). **Commit-and-test discipline; NEVER committed.**
+
+**Result over 3 runs of Gemini 3.1 Pro Preview (same KBS clip):**
+| | run1 | run2 | run3 | |
+|---|---|---|---|---|
+| KOSPI absolute standalone (the target) | ✗ | ✗ | ✗ | **0/3 — rule ineffective** |
+| SK Hynix absolute | ✓ | ✓ | ✗ | 2/3 (noise level) |
+| KOSDAQ abs / Samsung abs (controls) | noisy | noisy | noisy | KOSDAQ 1/3, Samsung 3/3 — **model variance, not rule damage** |
+| multi-value tracking + audio_only_terms | ✓ | ✓ | ✓ | **3/3 preserved** |
+| total facts | 49 | 48 | 39 | all below the prior single 66-sample |
+
+**Conclusion:** a 1-sentence prompt rule CANNOT reliably force model attention onto a specific absolute value (KOSPI base absent in 3/3). Strengthening to "MUST" would likely just add noise. The earlier single-run "control regression" alarm was model variance (KOSDAQ abs is only 1/3 even WITH the rule). Rolled back per a pre-agreed 3-run decision matrix (CASE B). **Cost of re-trying this prompt approach: ~25 min wasted. Don't repeat without new evidence.**
+
+**Root-cause insight — the "gap" isn't really a gap:** KOSPI's base value IS in the report — captured in **Value Updates** as the multi-value entry `8,228.70 → 8,428.84` (survived all 3 runs). The cross-frame value tracking does the job; it just lives in the Value Updates section rather than being duplicated into `observed_facts`.
+
+**Correct future path (if absolute values in `observed_facts` ever becomes a real demo requirement):** a DETERMINISTIC aggregator-side backfill in `full_report_aggregator.py` — for each `value_updates` entry with `source='video'`, synthesize 1-2 `observed_facts` ("Index X at value Y", "Index X changed from Y to Z") at AGGREGATION time, not via prompt. 100% reliable, model-agnostic, works on all 6 arms at once, no API cost. Risk: needs dedup vs facts the model already emitted. Est. ~45-60 min. See §9.
+
 ---
 
 ## 6-Arm Pipeline — Gemini 3 Watchers (2026-06-02) — COMPLETE
@@ -208,6 +227,7 @@ All of this is **committed** (see §8 for the exact last commit). Key files:
    - **Gemma decomposition (optional)** — if more Gemma facts are ever desired, the `GEMINI_FACT_EXPANSION_ADDENDUM` (or equivalent) could be applied to the Gemma prompt path. Currently NOT done — 49 is Gemma's design target and its v3.3 prompt is deliberately untouched. (added 2026-06-04.)
    - **3.5 Flash multi-value tracking** — Flash produces 0 cross-frame multi-value `value_updates` even with the same addendum that gives 2.5 Pro / 3.1 Pro 3 entries each. Likely a model-capability limitation (weaker cross-frame state tracking), not a prompt bug. Worth investigating if Flash becomes a primary arm. (added 2026-06-04.)
    - **Qwen / Llama 4 post-expansion empirical confirmation** — they were NOT re-run after gemini-fact-expansion. Provably unaffected (their prompt path is byte-identical; they never call the addendum), but no fresh run was done. (added 2026-06-04.)
+   - **Aggregator-side absolute-value backfill** — promote each `source='video'` `value_updates` entry into 1-2 `observed_facts` deterministically (e.g. "Index X at value Y", "Index X changed from Y to Z"). **Replaces the REJECTED Rule 1a prompt approach** (see the ❌ rejected-experiment box above — a prompt rule can't reliably force a specific absolute value; KOSPI base was 0/3). Implement at AGGREGATION time in `full_report_aggregator.py`, not via prompt. Cross-arm benefit (works for all 6 arms without per-prompt changes); 100% reliable, no API cost. Needs dedup vs model-emitted facts. Est. ~45-60 min. (added 2026-06-04.)
 3. **Recall:** stuck ~58% substring / **~88% fuzzy** (`recall_fuzzy` in `tests/test_recall_measure.py`). The substring metric is hostile; real capture ~88%. Ceiling is OCR read-quality + the metric — only addressable via off-limits higher-DPI / DBSCAN-eps.
 
 ---
