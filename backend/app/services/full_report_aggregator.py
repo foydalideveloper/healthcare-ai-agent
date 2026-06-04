@@ -375,13 +375,84 @@ def _empty_report(generated_at: str | None = None) -> dict:
             "meaningful_ocr_items": 0, "filtered_ocr_items": 0,
             "meaningful_observations": 0, "filtered_observations": 0,
             "audio_facts_extracted": 0, "audio_facts_cross_referenced": 0,
-            "audio_only_facts": 0,
+            "audio_only_facts": 0, "backfilled_facts_count": 0,
         },
         "metadata": {
             "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
             "schema_version": SCHEMA_VERSION,
         },
     }
+
+
+# ── Absolute-value backfill (deterministic; replaces the rejected Rule 1a prompt) ──
+# For each video-source value_updates entry, synthesize 1-2 observed_facts so the
+# on-screen absolute values appear in the facts list, not only in the Value Updates
+# table. Runs at aggregation time AFTER the audio-xref layer (so source tags exist).
+# Cross-arm: works for all 6 arms with no prompt/extraction change. Dedup avoids
+# duplicating values an arm already emitted naturally (e.g. Gemma).
+def _normalize_for_fact_dedup(text: str) -> str:
+    """Lowercase + strip; collapse digit-group commas so '8,228.70' == '8228.70'."""
+    text = _as_str(text).strip()
+    text = re.sub(r"(\d),(\d)", r"\1\2", text)
+    return text.lower()
+
+
+def _generate_facts_from_value_update(update: dict) -> list[str]:
+    """ONE candidate fact (the base/first value) for a video-source value_updates
+    entry: "<label> is at <value>.". The SECOND value of a multi-value entry is
+    deliberately NOT emitted — the full "Y → Z" progression already appears in the
+    Value Updates table, so an "also shown at Z" fact would just duplicate it.
+    Skips non-video / unlabeled / empty.
+    """
+    if not isinstance(update, dict) or update.get("source") != "video":
+        return []
+    label = _as_str(update.get("label")).strip()
+    if not label:
+        return []
+    values = _as_list(update.get("values"))
+    if not values:
+        return []
+    first = values[0]
+    first_val = _as_str(first.get("value")).strip() if isinstance(first, dict) else _as_str(first).strip()
+    return [f"{label} is at {first_val}."] if first_val else []
+
+
+def _is_fact_already_present(candidate_fact: str, existing_facts: list[str]) -> bool:
+    """True if some existing fact already carries BOTH this candidate's label and
+    its numeric value (handles '8,228.70' vs '8228.70', and grouped facts that
+    mention several metrics). Conservative: requires label AND number in the SAME
+    existing fact, so unrelated numbers elsewhere don't cause false dedups."""
+    # Number regex requires a digit after any decimal point, so a sentence-final
+    # period ("...8,228.70.") is NOT swallowed into the number (which would make
+    # "8228.70." != "8228.70" and break dedup against a mid-sentence occurrence).
+    _NUM = r"\d+(?:\.\d+)?"
+    _sep = lambda s: re.sub(r"[/\-\s.]+", "", s)  # slash/hyphen/space-insensitive label
+    cand = _normalize_for_fact_dedup(candidate_fact)
+    cand_numbers = re.findall(_NUM, cand)
+    m = re.match(r"[\w가-힣/]+", cand)
+    cand_label = _sep(m.group(0)) if m else ""   # "usd/krw" -> "usdkrw"
+    if not cand_label or not cand_numbers:
+        return False
+    for existing in existing_facts:
+        ex = _normalize_for_fact_dedup(existing)
+        if cand_label in _sep(ex):               # matches "USD-KRW", "USD / KRW", etc.
+            ex_numbers = set(re.findall(_NUM, ex))
+            if any(n in ex_numbers for n in cand_numbers):
+                return True
+    return False
+
+
+def backfill_absolute_value_facts(observed_facts: list[str], value_updates: list[dict]) -> list[str]:
+    """Append synthetic absolute-value facts for video-source value_updates that
+    aren't already represented in observed_facts. Order preserved; new facts at
+    the end; dedups against both the originals and already-added backfills."""
+    base = list(observed_facts or [])
+    added: list[str] = []
+    for update in (value_updates or []):
+        for fact in _generate_facts_from_value_update(update):
+            if not _is_fact_already_present(fact, base + added):
+                added.append(fact)
+    return base + added
 
 
 def aggregate_events_to_full_report(events: list[dict], generated_at: str | None = None) -> dict:
@@ -557,5 +628,13 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
     report["metrics"]["audio_facts_extracted"] = len(audio_facts)
     report["metrics"]["audio_facts_cross_referenced"] = len(also_in_ocr)
     report["metrics"]["audio_only_facts"] = len(audio_only_facts)
+
+    # === Absolute-value backfill (after audio-xref so source tags exist) ===
+    # Promote video-source value_updates into observed_facts deterministically,
+    # with label+number dedup. Replaces the rejected Rule 1a prompt approach.
+    _facts_before = len(report["all_observed_facts"])
+    report["all_observed_facts"] = backfill_absolute_value_facts(
+        report["all_observed_facts"], report["value_updates"])
+    report["metrics"]["backfilled_facts_count"] = len(report["all_observed_facts"]) - _facts_before
 
     return report
