@@ -568,17 +568,27 @@ def extract_audio(video_path: Path) -> Optional[Path]:
 
 def whisper_transcribe(audio_path: Path) -> Optional[dict]:
     """Returns {"text": full_transcript, "segments": [{start, end, text}, ...]}"""
-    # Optional noise reduction + amplification before Whisper. Falls back to raw
-    # audio on any failure or when SKIP_AUDIO_PREPROC is set (.env escape hatch).
+    # Audio preprocessing is DEFAULT-OFF for 100% speech preservation (2026-06-04).
+    # Option C (commit 85bf21f, noisereduce) was found to silently drop/substitute
+    # quieter legitimate speech (e.g. the analyst-quote sentences 3년에서 5년 /
+    # 사이클 장기화 vanished from the test clip), and the user's priority is
+    # preserving ALL audio content even with Whisper errors. The module stays for
+    # future content-safe tuning; enable ONLY via ENABLE_AUDIO_PREPROC=1.
+    # SKIP_AUDIO_PREPROC=1 remains a legacy override and WINS over ENABLE.
     audio_for_whisper = audio_path
     preprocessed_path: Optional[Path] = None
-    if AUDIO_PREPROC_AVAILABLE and not os.environ.get("SKIP_AUDIO_PREPROC"):
+    _preproc_enabled = (
+        AUDIO_PREPROC_AVAILABLE
+        and os.environ.get("ENABLE_AUDIO_PREPROC") == "1"
+        and os.environ.get("SKIP_AUDIO_PREPROC") != "1"  # legacy override still wins
+    )
+    if _preproc_enabled:
         try:
             cleaned = _preprocess_audio(str(audio_path))
             if cleaned != str(audio_path):
                 preprocessed_path = Path(cleaned)
                 audio_for_whisper = preprocessed_path
-                print(f"  [whisper] using noise-reduced audio: {preprocessed_path.name}")
+                print(f"  [whisper] using noise-reduced audio (ENABLE_AUDIO_PREPROC=1): {preprocessed_path.name}")
         except Exception as e:
             print(f"  [whisper] preprocessing failed, using raw audio: {e}")
     try:
