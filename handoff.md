@@ -210,14 +210,15 @@ All of this is **committed** (see §8 for the exact last commit). Key files:
 
 ## 9. Next further plans
 
-**✅ Recently completed:**
-- **Aggregator-side absolute-value backfill — DONE (2026-06-04, commit `b7a5946`).** Implements the deferred path below, superseding the rejected "Rule 1a" prompt experiment (whose ❌ negative-result note stays intact as the "why we didn't go that direction" record). One file: `full_report_aggregator.py` (+80/−1). Adds 4 helpers (`_normalize_for_fact_dedup`, `_generate_facts_from_value_update`, `_is_fact_already_present`, `backfill_absolute_value_facts`) + integration at line 561 (AFTER the v3.4 audio-xref source tagging). **Base-value-only emission (Option 1)** — the second-value branch was dropped as redundant with the Value Updates "Y → Z" arrow notation. Two regex bugs caught & fixed during testing: (1) sentence-final period swallowed by the number regex (`8,228.70.` ≠ `8228.70`), (2) label robustness (`USD/KRW` ≡ `USD-KRW`, slash/hyphen/space-insensitive). Result: **+1 fact on Gemini 3.1 Pro** (KOSPI base added, 100% deterministic vs Rule 1a's 0/3), **+0 on Gemma** (dedup skips its natural facts), +0 on the empty edge case. Cross-arm (all 6 arms), no API cost. Multi-value tracking / audio_only_terms=4 / schema v3.4 all preserved.
+**✅ Completed in this session (2026-06-04):**
+- **`b7a5946` — Aggregator-side absolute-value backfill.** Implements the deferred path below, superseding the rejected "Rule 1a" prompt experiment (whose ❌ negative-result note stays intact as the "why we didn't go that direction" record). One file: `full_report_aggregator.py` (+80/−1). Adds 4 helpers (`_normalize_for_fact_dedup`, `_generate_facts_from_value_update`, `_is_fact_already_present`, `backfill_absolute_value_facts`) + integration at line 561 (AFTER the v3.4 audio-xref source tagging). **Base-value-only emission (Option 1)** — the second-value branch was dropped as redundant with the Value Updates "Y → Z" arrow notation. Two regex bugs caught & fixed during testing: (1) sentence-final period swallowed by the number regex (`8,228.70.` ≠ `8228.70`), (2) label robustness (`USD/KRW` ≡ `USD-KRW`, slash/hyphen/space-insensitive). Result: **+1 fact on Gemini 3.1 Pro** (KOSPI base added, 100% deterministic vs Rule 1a's 0/3), **+0 on Gemma** (dedup skips its natural facts), +0 on the empty edge case. Cross-arm (all 6 arms), no API cost. Multi-value tracking / audio_only_terms=4 / schema v3.4 all preserved.
+- **`85bf21f` — Audio preprocessing with noisereduce (Lighter scope).** NEW `backend/glasses_watcher/audio_preprocessor.py` (noisereduce spectral gating + ~6dB amplification on the 16kHz mono WAV from `extract_audio()`, before Whisper) + surgical integration inside `whisper_transcribe()` in `_lifelog_test.py` (+32/−1) with a **`SKIP_AUDIO_PREPROC` .env escape hatch** + temp-file cleanup + 4 unit tests. **soundfile-only I/O — librosa deliberately SKIPPED** (audio is already 16kHz mono, so no resample needed) to avoid numba/llvmlite and keep the torch/paddle/ctranslate2 DLL stack untouched (numpy stays 1.26.4). Degrades gracefully to raw audio on any failure / non-16kHz input. **Honest result:** eliminated **4/4** known Whisper error-forms (originals 승리/크룸/분풍/공독); **2/4 cleanly produce the correct word** (심리, 흐름); the other 2 segments (훈풍, 공급) transcribe differently in the new pass — error gone but correct form not empirically confirmed. Noise reduction can't fix errors that are genuine model/phonetic limits rather than noise artifacts. Latency **improved −22s** (302.7s vs ~325s baseline). DLL-stack health verified by a single-process PaddleOCR + Whisper + Gemini run. **Adds 2 packages — see "Environment Dependencies" below.**
 
 1. **Immediate:** ✅ DONE — user chose (A); v4 (49 facts) accepted as the shipped report. No further action on item 4.
 2. **Deferred (from `handoff_2026-06-02.md` §5 — not active):**
    - Date-entity dedup (3 date facts → 1; cosmetic, regression risk, deliberately skipped).
    - Multi-arm comparison inside the Word doc (cross-arm JSON aggregation already works by omitting `source_model`).
-   - Audio quality — external mic / Mentra Live migration to fix Korean transcript errors.
+   - Audio quality — external mic / Mentra Live migration to fix Korean transcript errors. **(Partially mitigated 2026-06-04 in `85bf21f`: noisereduce preprocessing eliminated the 4 known error-forms, 2/4 fully corrected — software side done; hardware mic upgrade still the real fix for the remaining phonetic-limit errors.)**
    - value_updates multi-value deltas on noisy OCR — needs `detect_value_changes` robustness in the **off-limits** `ocr_preprocessor.py`.
    - Glasses clock re-sync via AIMB bridge (mtime fallback is a safety net, not a cure).
    - AIMB-G1 BLE auto-wake (blocked — see `aimb-bridge-android/handoff.md`).
@@ -266,13 +267,24 @@ All of this is **committed** (see §8 for the exact last commit). Key files:
 
 ---
 
+## ⚠️ Environment Dependencies (NON-DEFAULT — required for a fresh `.venv`)
+
+**A fresh `.venv` must `pip install` these or audio preprocessing silently disables itself (graceful, but you lose the fix):**
+- **`noisereduce` (3.0.3)** + **`soundfile` (0.13.1)** — added 2026-06-04 (`85bf21f`) for the Whisper audio-preprocessing step. Install: `.venv\Scripts\python.exe -m pip install noisereduce soundfile`.
+- **`librosa` is deliberately NOT used** — `audio_preprocessor.py` uses `soundfile` for I/O so it never pulls `numba`/`llvmlite` (keeps the torch/paddle/ctranslate2 DLL stack stable; numpy stays 1.26.4). Do NOT "add librosa for convenience."
+- There is **no `requirements.txt`** in this project (deliberate — creating one is a separate refactor, out of scope). This handoff section is the dependency record. The audio module degrades gracefully if the libs are missing (`AUDIO_PREPROC_AVAILABLE=False` → raw audio), so the pipeline won't crash — it just won't denoise.
+- **Existing pinned stack (do not perturb):** numpy 1.26.4 · torch 2.11.0+cu128 · ctranslate2 4.7.2 · faster_whisper 1.2.1 · paddle 2.6.2 · scipy 1.17.1.
+- **Escape hatch:** set `SKIP_AUDIO_PREPROC=1` in `backend/.env` to disable preprocessing without code changes.
+
+---
+
 ## 12. Operational reminders (HARD constraints — preserve)
 
 - **Always run `.venv\Scripts\python.exe`** — never conda `(base)` or system Python311 (DLL shadowing → WinError 127). Run watchers from a non-conda shell.
 - **Whisper is CPU now** — keeps the 32GB GPU free for Gemma 26B Q8 + Paddle.
 - **One GPU processor at a time** — don't run multiple watchers + a manual clip together (they time each other out).
 - **DO NOT touch** `ocr_preprocessor.py` (extraction pipeline).
-- **DO NOT** add a new Supabase column/migration, install new npm packages, or use Unicode emoji in `print()` (cp949 crash → use `[OK]/[ERR]/[INFO]`).
+- **DO NOT** add a new Supabase column/migration, install new npm packages, or use Unicode emoji in `print()` (cp949 crash → use `[OK]/[ERR]/[INFO]`). *(Python-package exception, 2026-06-04: `noisereduce` + `soundfile` were added with user sign-off after a dry-run confirmed the torch/paddle stack was untouched — see "Environment Dependencies" above. Any future pip install must clear the same DLL-safety bar.)*
 - **DO NOT commit** `failed_parses/`, `.venv/`, large model files, or `test_data/` binaries.
 - FastAPI `--reload` + frontend hot-reload pick up aggregator/exporter/page edits — no restart needed.
 
