@@ -78,6 +78,16 @@ except Exception as _e:  # pragma: no cover
     OCR_AVAILABLE = False
     print(f"[WARN] _lifelog_test: ocr_preprocessor import failed - OCR pass disabled ({type(_e).__name__}: {_e})")
 
+# Optional audio preprocessor (noise reduction before Whisper; lazy, degrades
+# gracefully if soundfile/noisereduce are missing).
+try:
+    from audio_preprocessor import preprocess_audio_for_whisper as _preprocess_audio
+    AUDIO_PREPROC_AVAILABLE = True
+except Exception as _e:  # pragma: no cover
+    _preprocess_audio = None
+    AUDIO_PREPROC_AVAILABLE = False
+    print(f"[WARN] _lifelog_test: audio_preprocessor import failed - audio preproc disabled ({type(_e).__name__}: {_e})")
+
 # Failed-parse dump dir. JSON parse failures (long-prompt edge cases) are
 # logged here as {arm}_{epoch_ms}.txt so they don't crash the watcher.
 FAILED_PARSES_DIR = Path(__file__).parent / "failed_parses"
@@ -558,10 +568,23 @@ def extract_audio(video_path: Path) -> Optional[Path]:
 
 def whisper_transcribe(audio_path: Path) -> Optional[dict]:
     """Returns {"text": full_transcript, "segments": [{start, end, text}, ...]}"""
+    # Optional noise reduction + amplification before Whisper. Falls back to raw
+    # audio on any failure or when SKIP_AUDIO_PREPROC is set (.env escape hatch).
+    audio_for_whisper = audio_path
+    preprocessed_path: Optional[Path] = None
+    if AUDIO_PREPROC_AVAILABLE and not os.environ.get("SKIP_AUDIO_PREPROC"):
+        try:
+            cleaned = _preprocess_audio(str(audio_path))
+            if cleaned != str(audio_path):
+                preprocessed_path = Path(cleaned)
+                audio_for_whisper = preprocessed_path
+                print(f"  [whisper] using noise-reduced audio: {preprocessed_path.name}")
+        except Exception as e:
+            print(f"  [whisper] preprocessing failed, using raw audio: {e}")
     try:
         model = _get_whisper_model()
         segments_iter, info = model.transcribe(
-            str(audio_path),
+            str(audio_for_whisper),
             language=None,
             temperature=0,
             vad_filter=True,
@@ -580,6 +603,14 @@ def whisper_transcribe(audio_path: Path) -> Optional[dict]:
     except Exception as e:
         print(f"  [whisper] failed: {e}")
         return None
+    finally:
+        # Remove the temporary preprocessed WAV (non-critical).
+        if preprocessed_path is not None:
+            try:
+                if preprocessed_path.exists():
+                    preprocessed_path.unlink()
+            except Exception:
+                pass
 
 
 def transcript_slice(transcript: Optional[dict], start_sec: float, end_sec: float) -> str:
