@@ -1,6 +1,6 @@
 # Healthcare AI Agent — RESUME HERE (Session Handoff)
 
-**Last updated:** 2026-06-02, end of **6-arm session** (added 2 Gemini 3 arms on top of v3.4).
+**Last updated:** 2026-06-04, end of **gemini-fact-expansion session** (Gemini arms now 41-66 facts).
 **This is the FIRST file to read when resuming.** It is the umbrella + the current-state pointer.
 
 > ## Read order on resume
@@ -12,7 +12,35 @@
 
 ---
 
-## ⭐ LATEST: 6-Arm Pipeline — Gemini 3 Watchers (2026-06-02) — COMPLETE
+## ⭐ LATEST: Gemini Fact Expansion (2026-06-04) — COMPLETE
+
+**Problem:** with the shared v3.3 prompt, Gemini arms produced too few `observed_facts` (3.1 Pro=19, Flash=18) vs Gemma's 49 — high quality but low volume. **Fix:** a Gemini-ONLY prompt addendum that instructs DECOMPOSITION of what the model already sees (no padding, no quality drop). Purely additive.
+
+**Architecture (key — differs from the original mission template):** the v3.3 prompt is `LIFELOG_PROMPT` (line 105), embedded in the SHARED `_build_user_prompt()` used by all 4 base arms. To isolate a Gemini-only variant WITHOUT touching shared code, a new constant **`GEMINI_FACT_EXPANSION_ADDENDUM`** (defined ~line 1146, in the Gemini section) is appended to the prompt **inside `call_gemini_lifelog` ONLY** (line ~1275), AFTER `_build_user_prompt()` returns. Diff = **100 insertions, 0 deletions** — `LIFELOG_PROMPT`, `_build_user_prompt`, `_GEMMA_SYSTEM_INSTRUCTION`, and the gemma/qwen/llama callers are byte-identical. All 3 Gemini arms share `call_gemini_lifelog`, so the addendum applies to all 3 automatically.
+
+**The 8 decomposition rules in the addendum:** (1) multi-value panels → one fact per value, (2) multi-stock boards → one fact per stock, (3) each headline/overlay → own fact (verbatim quoted), (4) named entities → split identity from each claim, (5) each UI element → own fact w/ location, (6) audio↔video cross-references, (7) scene/environment → each detail, (8) temporal/progression. Quality bar UNCHANGED (subject+value/relationship, no filler, no padding, skip empty categories). Explicitly reinforces "KEEP value_updates multi-value behavior."
+
+**Commit:** `5e69597` **gemini-fact-expansion**.
+
+**Per-arm `observed_facts` expectations (UPDATED — measured on test clip `20260528144922838.mp4`):**
+| Arm | Facts | Multi-value value_updates | Notes |
+|---|---|---|---|
+| Gemma 4 26B | **~49** | none (not implemented) | UNCHANGED — verbose, ambient-inclusive; v3.3 prompt untouched |
+| Qwen 3.5 VL | baseline | none | UNCHANGED (prompt untouched; not re-run) |
+| Llama 4 Maverick | baseline | none | UNCHANGED (prompt untouched; not re-run) |
+| **Gemini 2.5 Pro** | **~46** | **3** (KOSPI, KOSDAQ, USD/KRW) | expanded |
+| **Gemini 3.1 Pro Preview** | **~66** | **3** (KOSPI, KOSDAQ, USD/KRW) | highest/most thorough decomposition |
+| **Gemini 3.5 Flash** | **~41** | **0** | expanded; doesn't do cross-frame multi-value (model limitation, not a bug) |
+
+The ~25-fact spread between Flash (41) and 3.1 Pro (66) is each model's natural verbosity at the SAME quality bar — correct behavior. **3.1 Pro overshot the 40-60 target to 66; deliberately ACCEPTED** (0 near-dupes, ~3% filler — high-quality over-delivery; a hard count cap would make the model drop genuine facts and risk the multi-value tracking).
+
+**Critical preservation verified (the must-not-break list):** Gemma still 49; Gemini 3.1 Pro KOSPI 8,228.70→8,428.84 + KOSDAQ 1,133.13→1,148.16 + USD/KRW 1,501.80→1,500.40 all PRESENT; audio_only_terms=4 on all 3 Gemini arms; value_updates source tagging (7 audio-tagged each); schema v3.4; no latency regression. Quality bar held (0 dupes, ~3% filler).
+
+**Baselines + post-expansion artifacts** (untracked test_data): `baseline_gemini_{3_1_pro_preview,3_5_flash}_pre_expansion.json`, `expansion_test_gemini_{3_5_flash,3_1_pro_preview}.json`.
+
+---
+
+## 6-Arm Pipeline — Gemini 3 Watchers (2026-06-02) — COMPLETE
 
 **Two new LLM arms added: `gemini_3_1_pro_preview` + `gemini_3_5_flash`. Total arms 4 → 6.** Purely additive; the existing 4 arms (gemma4, qwen, llama4, gemini_2_5_pro) are untouched.
 
@@ -177,6 +205,9 @@ All of this is **committed** (see §8 for the exact last commit). Key files:
    - **Gemini arm A/B comparison** — Pro Preview (slower, fewer/denser events) vs 3.5 Flash (faster, higher recall) vs 2.5 Pro. Compare event count, fact richness, Korean accuracy before choosing a default Gemini arm. (added 2026-06-02 6-arm session.)
    - **Dead default `GEMINI_MODEL_DEFAULT="gemini-3.1-pro"`** in `_lifelog_test.py:1131` — that exact ID does NOT exist on the API (only `gemini-3.1-pro-preview` does). Harmless today because `backend/.env` pins `GEMINI_MODEL=gemini-2.5-pro`, but the fallback is dead. Update the default to a real ID someday. (cleanup; added 2026-06-02.)
    - **Git hygiene — 3 untracked non-watcher files** in `backend/glasses_watcher/`: `_v2_audit.py`, `tests/__init__.py`, `tests/test_ocr_preprocessor.py`. Left untracked when the watcher system was adopted (they're not watchers). Decide whether to track or .gitignore them. (added 2026-06-02.)
+   - **Gemma decomposition (optional)** — if more Gemma facts are ever desired, the `GEMINI_FACT_EXPANSION_ADDENDUM` (or equivalent) could be applied to the Gemma prompt path. Currently NOT done — 49 is Gemma's design target and its v3.3 prompt is deliberately untouched. (added 2026-06-04.)
+   - **3.5 Flash multi-value tracking** — Flash produces 0 cross-frame multi-value `value_updates` even with the same addendum that gives 2.5 Pro / 3.1 Pro 3 entries each. Likely a model-capability limitation (weaker cross-frame state tracking), not a prompt bug. Worth investigating if Flash becomes a primary arm. (added 2026-06-04.)
+   - **Qwen / Llama 4 post-expansion empirical confirmation** — they were NOT re-run after gemini-fact-expansion. Provably unaffected (their prompt path is byte-identical; they never call the addendum), but no fresh run was done. (added 2026-06-04.)
 3. **Recall:** stuck ~58% substring / **~88% fuzzy** (`recall_fuzzy` in `tests/test_recall_measure.py`). The substring metric is hostile; real capture ~88%. Ceiling is OCR read-quality + the metric — only addressable via off-limits higher-DPI / DBSCAN-eps.
 
 ---
