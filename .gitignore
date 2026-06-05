@@ -141,3 +141,7 @@ backend/glasses_watcher/processed*.json
 
 # --- Suspicious top-level junk (shell-redirect safety net) ---
 /=*
+
+# Job 2 training datasets (large binary frames + JSONL, regenerable from DB + videos)
+training_data/
+backend/training_data/
