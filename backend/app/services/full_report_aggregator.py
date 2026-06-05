@@ -41,8 +41,18 @@ from app.services.audio_fact_extractor import (  # noqa: E402
     promote_to_value_updates,
     extract_audio_only_terms,
 )
+# Cross-arm consensus enrichment (v3.5). Pure stdlib module, sibling in
+# app/services — no pipeline imports pulled in.
+from app.services.consensus_enricher import (  # noqa: E402
+    ArmFactsInput,
+    compute_consensus_facts,
+    consensus_facts_to_dict_list,
+    resolve_min_agreement,
+    HIGH_CONFIDENCE_FRACTION,
+    MEDIUM_CONFIDENCE_FRACTION,
+)
 
-SCHEMA_VERSION = "v3.4"  # v3.4: audio-OCR cross-reference layer (additive)
+SCHEMA_VERSION = "v3.5"  # v3.5: cross-arm consensus enrichment (additive)
 _QUALITY_RANK = {"poor": 0, "partial": 1, "good": 2}  # for "worst quality"
 
 
@@ -365,6 +375,7 @@ def _empty_report(generated_at: str | None = None) -> dict:
         "language_detected": "",
         "timeline": [], "value_updates": [],
         "audio_only_terms": [],
+        "consensus_observed_facts": [],
         "visual_summary": {
             "visual_objects": [], "ui_elements": [], "charts_detected": [],
             "headlines": [], "panels_detected_count": 0, "broadcast_mode": False,
@@ -376,6 +387,9 @@ def _empty_report(generated_at: str | None = None) -> dict:
             "meaningful_observations": 0, "filtered_observations": 0,
             "audio_facts_extracted": 0, "audio_facts_cross_referenced": 0,
             "audio_only_facts": 0, "backfilled_facts_count": 0,
+            "consensus_fact_count": 0, "high_confidence_fact_count": 0,
+            "medium_confidence_fact_count": 0, "consensus_threshold_used": 0,
+            "consensus_threshold_pct": 0, "arms_compared": 0,
         },
         "metadata": {
             "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
@@ -453,6 +467,41 @@ def backfill_absolute_value_facts(observed_facts: list[str], value_updates: list
             if not _is_fact_already_present(fact, base + added):
                 added.append(fact)
     return base + added
+
+
+# ── Cross-arm consensus enrichment (v3.5) ─────────────────────────────────
+# Events here are FLATTENED (raw_event spread to top level by the /events +
+# /full-report endpoints), so observed_facts / source_model are top-level keys —
+# NOT nested under raw_event. Consensus is only meaningful across multiple arms.
+def _can_compute_consensus(events: list[dict]) -> bool:
+    """True if >= 2 distinct source_model arms each contributed observed_facts."""
+    arms_with_facts: set[str] = set()
+    for e in events:
+        arm = _as_str(e.get("source_model")).strip()
+        facts = _as_list(e.get("observed_facts"))
+        if arm and any(_as_str(f).strip() for f in facts):
+            arms_with_facts.add(arm)
+    return len(arms_with_facts) >= 2
+
+
+def _build_arm_inputs_from_events(events: list[dict]) -> list[ArmFactsInput]:
+    """Group events by source_model and collect each arm's observed_facts.
+
+    One arm may have several event rows (per-chunk / per-topic); their facts are
+    concatenated for that arm. Consensus is then computed across DISTINCT arms.
+    """
+    arm_to_facts: dict[str, list[str]] = {}
+    for e in events:
+        arm = _as_str(e.get("source_model")).strip()
+        if not arm:
+            continue
+        bucket = arm_to_facts.setdefault(arm, [])
+        for f in _as_list(e.get("observed_facts")):
+            s = _as_str(f).strip()
+            if s:
+                bucket.append(s)
+    return [ArmFactsInput(arm_id=arm, observed_facts=facts)
+            for arm, facts in arm_to_facts.items()]
 
 
 def aggregate_events_to_full_report(events: list[dict], generated_at: str | None = None) -> dict:
@@ -636,5 +685,36 @@ def aggregate_events_to_full_report(events: list[dict], generated_at: str | None
     report["all_observed_facts"] = backfill_absolute_value_facts(
         report["all_observed_facts"], report["value_updates"])
     report["metrics"]["backfilled_facts_count"] = len(report["all_observed_facts"]) - _facts_before
+
+    # === Self-Improvement Job 1: cross-arm consensus enrichment (v3.5) =====
+    # PURELY ADDITIVE: compares per-arm observed_facts and surfaces the ones >=
+    # ~67% of the contributing arms agree on, each tagged with a confidence score.
+    # Runs ONLY for multi-arm reports; single-arm reports get an empty list (no
+    # consensus possible). Operates on the per-arm raw observed_facts from the
+    # events (NOT the cross-arm-pooled all_observed_facts), so the existing
+    # all_observed_facts list is never read or mutated here.
+    if _can_compute_consensus(events):
+        arm_inputs = _build_arm_inputs_from_events(events)
+        arms_compared = len(arm_inputs)
+        threshold = resolve_min_agreement(arms_compared)  # adaptive 67% (floor 2)
+        consensus = compute_consensus_facts(arm_inputs, min_agreement_count=None)
+        report["consensus_observed_facts"] = consensus_facts_to_dict_list(consensus)
+        report["metrics"]["consensus_fact_count"] = len(consensus)
+        report["metrics"]["high_confidence_fact_count"] = sum(
+            1 for c in consensus if c.confidence >= HIGH_CONFIDENCE_FRACTION)
+        report["metrics"]["medium_confidence_fact_count"] = sum(
+            1 for c in consensus
+            if MEDIUM_CONFIDENCE_FRACTION <= c.confidence < HIGH_CONFIDENCE_FRACTION)
+        report["metrics"]["consensus_threshold_used"] = threshold
+        report["metrics"]["consensus_threshold_pct"] = round(threshold / arms_compared * 100)
+        report["metrics"]["arms_compared"] = arms_compared
+    else:
+        report["consensus_observed_facts"] = []
+        report["metrics"]["consensus_fact_count"] = 0
+        report["metrics"]["high_confidence_fact_count"] = 0
+        report["metrics"]["medium_confidence_fact_count"] = 0
+        report["metrics"]["consensus_threshold_used"] = 0
+        report["metrics"]["consensus_threshold_pct"] = 0
+        report["metrics"]["arms_compared"] = 1 if events else 0
 
     return report
