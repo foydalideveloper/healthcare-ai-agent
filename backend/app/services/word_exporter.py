@@ -11,6 +11,7 @@ base styles. Calibri is used for Latin text.
 """
 from __future__ import annotations
 
+import math
 import re
 from io import BytesIO
 
@@ -18,7 +19,13 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor
+
+# Confidence band cutoffs shared with the consensus enricher (single source of truth).
+from app.services.consensus_enricher import (  # noqa: E402
+    HIGH_CONFIDENCE_FRACTION,
+    MEDIUM_CONFIDENCE_FRACTION,
+)
 
 ASCII_FONT = "Calibri"
 CJK_FONT = "Malgun Gothic"  # 맑은 고딕 — clean Korean rendering in Word + LibreOffice
@@ -28,6 +35,7 @@ GREEN = RGBColor(0x1A, 0x7F, 0x37)
 RED = RGBColor(0xC0, 0x2B, 0x2B)
 MUTED = RGBColor(0x80, 0x80, 0x80)
 BLUE = RGBColor(0x1F, 0x4E, 0x79)  # audio-sourced rows (Value Updates source col)
+AMBER = RGBColor(0xB8, 0x86, 0x0B)  # medium-confidence consensus badge
 
 
 def _s(v) -> str:
@@ -133,6 +141,8 @@ def _add_title_page(doc, r):
         ("Avg recall estimate", f"{(r.get('metrics') or {}).get('recall_estimate_avg', 0)}"),
         ("Audio facts extracted", str((r.get("metrics") or {}).get("audio_facts_extracted", 0))),
         ("Audio-only mentions", str(len(r.get("audio_only_terms") or []))),
+        ("Cross-arm consensus facts", str((r.get("metrics") or {}).get("consensus_fact_count", 0))),
+        ("Arms compared", str((r.get("metrics") or {}).get("arms_compared", 0))),
         ("Generated", _s((r.get("metadata") or {}).get("generated_at"))),
     ]
     t = _new_table(doc, ["Field", "Value"])
@@ -165,6 +175,67 @@ def _add_observed_facts_section(doc, r):
         return
     for f in facts:
         _para(doc, _s(f), style="List Number")
+    if extra:
+        _para(doc, f"... and {extra} more", italic=True)
+
+
+def _add_consensus_section(doc, r):
+    """Cross-Arm Consensus Findings (v3.5): facts that >= ~67% of the LLM arms
+    independently agreed on, each with a confidence badge + arm attribution.
+
+    Hidden entirely on single-arm reports (arms_compared < 2). On a multi-arm
+    report that reached no consensus, shows the heading + an italic note.
+    """
+    consensus = r.get("consensus_observed_facts") or []
+    m = r.get("metrics") or {}
+    arms_compared = m.get("arms_compared", 0)
+    threshold = m.get("consensus_threshold_used", 0)
+    threshold_pct = m.get("consensus_threshold_pct", 0)
+
+    # Single-arm / not computable → don't render the section at all.
+    if not consensus and arms_compared < 2:
+        return
+
+    _heading(doc, "Cross-Arm Consensus Findings", 1)
+
+    if not consensus:
+        _para(doc, f"No facts reached the {threshold}-of-{arms_compared} arm "
+                   f"agreement threshold on this clip. Arms produced distinct "
+                   f"observations.", italic=True)
+        return
+
+    high = m.get("high_confidence_fact_count", 0)
+    medium = m.get("medium_confidence_fact_count", 0)
+    # Adaptive band descriptors: 4 arms → high is 4/4 unanimous; 6 arms → high ≥5/6.
+    high_min = max(1, math.ceil(HIGH_CONFIDENCE_FRACTION * arms_compared))
+    high_desc = (f"{arms_compared}/{arms_compared} unanimous"
+                 if high_min >= arms_compared else f"≥{high_min}/{arms_compared}")
+    _para(doc,
+          f"{len(consensus)} facts reached cross-arm agreement "
+          f"(≥{threshold} of {arms_compared} arms, {threshold_pct}%). "
+          f"{high} high-confidence ({high_desc}), "
+          f"{medium} medium-confidence ({threshold}/{arms_compared}).",
+          size=10, italic=True)
+
+    items, extra = _capped(consensus)
+    for cf in items:
+        conf = cf.get("confidence", 0) or 0
+        if conf >= HIGH_CONFIDENCE_FRACTION:
+            badge, badge_color = "[High] ", GREEN
+        elif conf >= MEDIUM_CONFIDENCE_FRACTION:
+            badge, badge_color = "[Med] ", AMBER
+        else:
+            badge, badge_color = "[Low] ", MUTED
+        p = doc.add_paragraph(style="List Number")
+        _set_run_fonts(p.add_run(badge), bold=True, color=badge_color)
+        _set_run_fonts(p.add_run(_s(cf.get("fact"))))  # CJK font applied → Hangul renders
+        # 9pt gray attribution subtitle.
+        sub = doc.add_paragraph()
+        sub.paragraph_format.left_indent = Inches(0.5)
+        arms = ", ".join(_s(a) for a in (cf.get("agreeing_arms") or []))
+        _set_run_fonts(sub.add_run(
+            f"Agreement: {cf.get('agreement_count', 0)}/{cf.get('total_arms', 0)} arms "
+            f"({int(conf * 100)}%) — {arms}"), size=9, color=MUTED)
     if extra:
         _para(doc, f"... and {extra} more", italic=True)
 
@@ -366,6 +437,7 @@ def generate_word_report(report: dict) -> BytesIO:
     _add_title_page(doc, report)
     _add_overview_section(doc, report)
     _add_observed_facts_section(doc, report)
+    _add_consensus_section(doc, report)        # v3.5: cross-arm consensus findings
     # Detailed Observations intentionally NOT rendered in the .docx (v3.3 decision):
     # observed_facts (~48) already covers the micro-details, and a separate section
     # was redundant. The enumerated_observations field is still in the JSON API.
