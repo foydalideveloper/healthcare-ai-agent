@@ -1,0 +1,583 @@
+{
+ "frames": [
+  "f07_t17s.png",
+  "f08_t20s.png"
+ ],
+ "engines": {
+  "PaddleOCR (baseline)": {
+   "cost_usd_per_1000": 0.0,
+   "overall_recovery_rate": 0.727,
+   "tokens_recovered": 16,
+   "tokens_total": 22,
+   "latency_p50_ms": 598.5,
+   "latency_max_ms": 719.3,
+   "per_frame": {
+    "f07_t17s.png": {
+     "metrics": {
+      "tokens_total": 12,
+      "tokens_recovered": 9,
+      "recovery_rate": 0.75,
+      "mean_char_accuracy": 0.888,
+      "latency_ms": 719.3,
+      "error": null,
+      "per_token": {
+       "삼성전자": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "307,000": {
+        "recovered": false,
+        "char_accuracy": 0.667
+       },
+       "SK하이닉스": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "2,243,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "SK스퀘어": {
+        "recovered": true,
+        "char_accuracy": 0.8
+       },
+       "1,276,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "삼성전자우": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "192,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "현대차": {
+        "recovered": false,
+        "char_accuracy": 0.667
+       },
+       "681,000": {
+        "recovered": false,
+        "char_accuracy": 0.667
+       },
+       "삼성전기": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "1,630,000": {
+        "recovered": true,
+        "char_accuracy": 0.857
+       }
+      }
+     },
+     "ocr_texts": [
+      "전일대비",
+      "현재가",
+      "|이슈",
+      "한눈에",
+      "8000",
+      "2020",
+      "000",
+      "307",
+      "삼성전자",
+      "191000",
+      "2243000",
+      "SK하이닉스",
+      "속",
+      "95000",
+      "1276000",
+      "SK스웨어",
+      "스48",
+      "192000",
+      "삼성전자우",
+      "대차",
+      "GeaOor",
+      "SK하이닉스",
+      "시가총액",
+      "1조",
+      "려를",
+      "진입",
+      "9S께보",
+      "삼성전기",
+      "금문",
+      "1",
+      "630000",
+      "58",
+      "000"
+     ]
+    },
+    "f08_t20s.png": {
+     "metrics": {
+      "tokens_total": 10,
+      "tokens_recovered": 7,
+      "recovery_rate": 0.7,
+      "mean_char_accuracy": 0.821,
+      "latency_ms": 477.6,
+      "error": null,
+      "per_token": {
+       "KOSPI": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "8,428.84": {
+        "recovered": true,
+        "char_accuracy": 0.857
+       },
+       "KOSDAQ": {
+        "recovered": true,
+        "char_accuracy": 0.833
+       },
+       "1,148.16": {
+        "recovered": true,
+        "char_accuracy": 0.857
+       },
+       "CNH/KRW": {
+        "recovered": false,
+        "char_accuracy": 0.571
+       },
+       "221.27": {
+        "recovered": false,
+        "char_accuracy": 0.667
+       },
+       "USD/KRW": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "1,500.40": {
+        "recovered": true,
+        "char_accuracy": 0.857
+       },
+       "EUR/USD": {
+        "recovered": true,
+        "char_accuracy": 0.857
+       },
+       "CAD/KRW": {
+        "recovered": false,
+        "char_accuracy": 0.714
+       }
+      }
+     },
+     "ocr_texts": [
+      "NAR!",
+      "22/127",
+      "7481탕",
+      "0",
+      "10",
+      "KOSDAO",
+      "ELR/USD",
+      "KOSPI",
+      "2542281",
+      "040",
+      "이슈",
+      "USD/KRW",
+      "114816",
+      "한눈에",
+      "CADR!",
+      "842884",
+      "150040",
+      "44",
+      "2026년6월27일",
+      "650이랄",
+      "소",
+      "151912",
+      "91%0",
+      "책금",
+      "큰린기스고8우",
+      "이이이에",
+      "하HBarnik",
+      "문부는",
+      "114816",
+      "150040",
+      "842864",
+      "00",
+      "T",
+      "해1회4시",
+      "이KRS제보",
+      "Windows",
+      "어",
+      "아US",
+      "목로",
+      "음공"
+     ]
+    }
+   }
+  },
+  "PaddleStructure": {
+   "cost_usd_per_1000": 0.0,
+   "overall_recovery_rate": 0.636,
+   "tokens_recovered": 14,
+   "tokens_total": 22,
+   "latency_p50_ms": 511.9,
+   "latency_max_ms": 636.5,
+   "per_frame": {
+    "f07_t17s.png": {
+     "metrics": {
+      "tokens_total": 12,
+      "tokens_recovered": 5,
+      "recovery_rate": 0.417,
+      "mean_char_accuracy": 0.533,
+      "latency_ms": 387.3,
+      "error": null,
+      "per_token": {
+       "삼성전자": {
+        "recovered": false,
+        "char_accuracy": 0.0
+       },
+       "307,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "SK하이닉스": {
+        "recovered": false,
+        "char_accuracy": 0.333
+       },
+       "2,243,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "SK스퀘어": {
+        "recovered": false,
+        "char_accuracy": 0.4
+       },
+       "1,276,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "삼성전자우": {
+        "recovered": false,
+        "char_accuracy": 0.0
+       },
+       "192,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "현대차": {
+        "recovered": false,
+        "char_accuracy": 0.0
+       },
+       "681,000": {
+        "recovered": false,
+        "char_accuracy": 0.667
+       },
+       "삼성전기": {
+        "recovered": false,
+        "char_accuracy": 0.0
+       },
+       "1,630,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       }
+      }
+     },
+     "ocr_texts": [
+      "20205",
+      "8,000",
+      "307,000",
+      "191,000",
+      "2,243,000",
+      "SKo4",
+      "95,000",
+      "1,276,000",
+      "SK",
+      "4,80",
+      "192,000",
+      "dcutt",
+      "SKo|0|4|7l*4 1 E21",
+      "dows",
+      "1630000",
+      "58000"
+     ]
+    },
+    "f08_t20s.png": {
+     "metrics": {
+      "tokens_total": 10,
+      "tokens_recovered": 9,
+      "recovery_rate": 0.9,
+      "mean_char_accuracy": 0.957,
+      "latency_ms": 636.5,
+      "error": null,
+      "per_token": {
+       "KOSPI": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "8,428.84": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "KOSDAQ": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "1,148.16": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "CNH/KRW": {
+        "recovered": false,
+        "char_accuracy": 0.714
+       },
+       "221.27": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "USD/KRW": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "1,500.40": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "EUR/USD": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "CAD/KRW": {
+        "recovered": true,
+        "char_accuracy": 0.857
+       }
+      }
+     },
+     "ocr_texts": [
+      "CN/KRW221.27",
+      "0.13%)",
+      "KOSDAQ",
+      "EUR/USD",
+      "KOSPI",
+      "25.422.84",
+      "USD/KRW",
+      "CAD/XRW1",
+      "1,500.408,428.841,148.16",
+      "19",
+      "202627",
+      "tHeals",
+      "07,519.125.60.61",
+      "1.(0.)",
+      "4a",
+      "2.890%",
+      "Hana Bank",
+      "KOSDAG",
+      "KOST",
+      "LSD/ERN",
+      "1,148.16",
+      "1,500.40",
+      "8.428.84",
+      "famte",
+      "VRNON",
+      "TLRER",
+      "QKESA",
+      "Windows",
+      "0",
+      "ndows"
+     ]
+    }
+   }
+  },
+  "EasyOCR (ko+en)": {
+   "cost_usd_per_1000": 0.0,
+   "overall_recovery_rate": 0.5,
+   "tokens_recovered": 11,
+   "tokens_total": 22,
+   "latency_p50_ms": 720.5,
+   "latency_max_ms": 981.7,
+   "per_frame": {
+    "f07_t17s.png": {
+     "metrics": {
+      "tokens_total": 12,
+      "tokens_recovered": 7,
+      "recovery_rate": 0.583,
+      "mean_char_accuracy": 0.802,
+      "latency_ms": 981.7,
+      "error": null,
+      "per_token": {
+       "삼성전자": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "307,000": {
+        "recovered": false,
+        "char_accuracy": 0.667
+       },
+       "SK하이닉스": {
+        "recovered": true,
+        "char_accuracy": 0.833
+       },
+       "2,243,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "SK스퀘어": {
+        "recovered": true,
+        "char_accuracy": 0.8
+       },
+       "1,276,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "삼성전자우": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "192,000": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "현대차": {
+        "recovered": false,
+        "char_accuracy": 0.333
+       },
+       "681,000": {
+        "recovered": false,
+        "char_accuracy": 0.667
+       },
+       "삼성전기": {
+        "recovered": false,
+        "char_accuracy": 0.75
+       },
+       "1,630,000": {
+        "recovered": false,
+        "char_accuracy": 0.571
+       }
+      }
+     },
+     "ocr_texts": [
+      "전네데다",
+      "삼성전자",
+      "SK하이니스",
+      "2243,000",
+      "1",
+      "SK스키어",
+      "1,276,000",
+      "95.000",
+      "삼성전자우",
+      "192,000",
+      "4,80",
+      "실대+",
+      "nlo",
+      "9S보",
+      "SK하이넉스 시가증액 '1조달러 클럽' 진입",
+      "do34 정문 민공공",
+      "사선저기",
+      "7",
+      "Aanonn",
+      "5annn",
+      "현제가",
+      "유가증권시장",
+      "이규",
+      "만눈에 |",
+      "8000",
+      "202E",
+      "7000",
+      "807",
+      "191,000"
+     ]
+    },
+    "f08_t20s.png": {
+     "metrics": {
+      "tokens_total": 10,
+      "tokens_recovered": 4,
+      "recovery_rate": 0.4,
+      "mean_char_accuracy": 0.645,
+      "latency_ms": 459.2,
+      "error": null,
+      "per_token": {
+       "KOSPI": {
+        "recovered": true,
+        "char_accuracy": 1.0
+       },
+       "8,428.84": {
+        "recovered": true,
+        "char_accuracy": 0.857
+       },
+       "KOSDAQ": {
+        "recovered": true,
+        "char_accuracy": 0.833
+       },
+       "1,148.16": {
+        "recovered": true,
+        "char_accuracy": 0.857
+       },
+       "CNH/KRW": {
+        "recovered": false,
+        "char_accuracy": 0.429
+       },
+       "221.27": {
+        "recovered": false,
+        "char_accuracy": 0.333
+       },
+       "USD/KRW": {
+        "recovered": false,
+        "char_accuracy": 0.571
+       },
+       "1,500.40": {
+        "recovered": false,
+        "char_accuracy": 0.714
+       },
+       "EUR/USD": {
+        "recovered": false,
+        "char_accuracy": 0.286
+       },
+       "CAD/KRW": {
+        "recovered": false,
+        "char_accuracy": 0.571
+       }
+      }
+     },
+     "ocr_texts": [
+      "'Hanabrllis",
+      "Ol9w)",
+      "(NAW 27",
+      "(t",
+      "KOSDAO",
+      "KOSPI",
+      "148.16",
+      "25",
+      "Wddo기l",
+      "40 8",
+      "1",
+      "J",
+      "\"-yd\"",
+      "2일",
+      "TII",
+      "C",
+      "1",
+      "OSn",
+      "피",
+      "iHmurk",
+      "모",
+      "47d",
+      "I'",
+      "VI",
+      "Vod",
+      "1Di6",
+      "Vo4",
+      "시",
+      "9N,1",
+      "Wirdews",
+      ":",
+      "'[''의로 이론",
+      "dowsf 점촉 인종리",
+      "(I",
+      "[UD",
+      ",4228",
+      "KIIU",
+      "UDIKIW",
+      "이유",
+      ",428.84",
+      "만눈에 [",
+      "CDIRW",
+      "1500..",
+      "'2026년6월",
+      "OU1m)",
+      "VU",
+      "191912",
+      "O",
+      "{ul"
+     ]
+    }
+   }
+  }
+ }
+}

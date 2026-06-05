@@ -1,0 +1,32 @@
+{
+  "f04_t10s.png": {
+    "_desc": "APPENDIX (not scored): animated headline — documents PaddleOCR comma-number fragmentation (307,000 -> '307'+'000'), a separate architectural issue",
+    "appendix": true,
+    "must_contain": ["삼성전자", "307,000", "SK하이닉스", "2,243,000"],
+    "expected_entity_count": 2
+  },
+  "f07_t17s.png": {
+    "_desc": "KRX individual-stocks board (유가증권시장) — the PaddleOCR failure frame",
+    "must_contain": [
+      "삼성전자", "307,000",
+      "SK하이닉스", "2,243,000",
+      "SK스퀘어", "1,276,000",
+      "삼성전자우", "192,000",
+      "현대차", "681,000",
+      "삼성전기", "1,630,000"
+    ],
+    "expected_entity_count": 6
+  },
+  "f08_t20s.png": {
+    "_desc": "Hana Bank multi-currency board (small top ticker) — the missed-currency frame",
+    "must_contain": [
+      "KOSPI", "8,428.84",
+      "KOSDAQ", "1,148.16",
+      "CNH/KRW", "221.27",
+      "USD/KRW", "1,500.40",
+      "EUR/USD",
+      "CAD/KRW"
+    ],
+    "expected_entity_count": 6
+  }
+}

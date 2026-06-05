@@ -1,0 +1,36 @@
+{
+  "_note": "Provenance for the OCR-eval ground-truth frames. PNGs are gitignored (see ../.gitignore); regenerate via test_data/README.md. sha256 is of the original extracted PNG; a re-extracted frame may differ by a few ms across FFmpeg builds (verify OCR content vs ground_truth.json, not the hash).",
+  "source_clip": {
+    "path": "C:\\Users\\A\\AIMB-Bridge\\20260528144922838.mp4",
+    "duration_s": 61.6,
+    "frames": 1849,
+    "resolution": "1600x1200",
+    "description": "KBS-clip lifelog test video (Korean financial broadcast)"
+  },
+  "frames": {
+    "f04_t10s.png": {
+      "timestamp_s": 10,
+      "resolution": "1600x1200",
+      "bytes": 2201565,
+      "sha256": "ce79ee9e918a6e209aad8af9d20d0af52bcdf3472c11863a0870df84091d8362",
+      "role": "appendix (NOT scored) — animated headline; documents PaddleOCR comma-number fragmentation",
+      "ffmpeg": "ffmpeg -y -ss 10 -i <SRC> -frames:v 1 f04_t10s.png"
+    },
+    "f07_t17s.png": {
+      "timestamp_s": 17,
+      "resolution": "1600x1200",
+      "bytes": 2008346,
+      "sha256": "e23a8bcadf5a82e9a5d0cd28569c6d492831bdfa3266005c2019aca7a5b8d05c",
+      "role": "KRX individual-stocks board (유가증권시장) — Korean failure frame (12 scored tokens)",
+      "ffmpeg": "ffmpeg -y -ss 17 -i <SRC> -frames:v 1 f07_t17s.png"
+    },
+    "f08_t20s.png": {
+      "timestamp_s": 20,
+      "resolution": "1600x1200",
+      "bytes": 2395746,
+      "sha256": "c8188cf4ca87286bb1de2852660fec60591bafa5ea0af3f18bc78926a753b44d",
+      "role": "Hana Bank multi-currency board (small Latin ticker) — missed-currency frame (10 scored tokens)",
+      "ffmpeg": "ffmpeg -y -ss 20 -i <SRC> -frames:v 1 f08_t20s.png"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# OCR eval framework — keep code + results + provenance, exclude raw frame PNGs.
+# Frames are large binaries regenerable from the source clip (see
+# test_data/README.md). Repo convention keeps test_data/ binaries out of git.
+test_data/frames/*.png
+
+# Python caches
+__pycache__/
+*.pyc
