@@ -1266,6 +1266,15 @@ function fmtDate(iso: string): string {
 // ─────────────────────────────────────────────────────────────────────
 // Full Report — consolidated view of ALL events for one source_video
 // ─────────────────────────────────────────────────────────────────────
+// v3.5 — a fact that multiple LLM arms independently agreed on.
+type ConsensusFact = {
+  fact: string;
+  confidence: number;       // 0.0-1.0 == agreement_count / total_arms
+  agreeing_arms: string[];
+  agreement_count: number;
+  total_arms: number;
+};
+
 type FullReport = {
   source_video: string;
   source_model: string;
@@ -1286,6 +1295,7 @@ type FullReport = {
   timeline: Array<{ window_sec: string; summary: string; key_items: string[] }>;
   value_updates: ValueUpdate[];
   audio_only_terms?: string[];   // v3.4 — audio-only mentions (may be absent on old reports)
+  consensus_observed_facts?: ConsensusFact[];  // v3.5 — absent on old (v3.4) reports
   visual_summary: {
     visual_objects: string[]; ui_elements: string[]; charts_detected: string[];
     headlines: string[]; panels_detected_count: number; broadcast_mode: boolean;
@@ -1295,6 +1305,10 @@ type FullReport = {
     recall_estimate_avg: number; frame_sampling_rate_used: number;
     meaningful_ocr_items?: number; filtered_ocr_items?: number;
     meaningful_observations?: number; filtered_observations?: number;
+    // v3.5 consensus metrics (optional — absent on old reports)
+    consensus_fact_count?: number; high_confidence_fact_count?: number;
+    medium_confidence_fact_count?: number; consensus_threshold_used?: number;
+    consensus_threshold_pct?: number; arms_compared?: number;
   };
   metadata: { generated_at: string; schema_version: string };
 };
@@ -1374,6 +1388,59 @@ function FullReportModal({
                   </ol>
                 ) : <p className="italic text-gray-400">No observed facts.</p>}
               </FRSection>
+
+              {/* v3.5 cross-arm consensus. Hidden on old (v3.4) reports lacking the
+                  field, and on single-arm reports (arms_compared < 2) — matching the
+                  Word doc. Multi-arm with no consensus shows the heading + a note. */}
+              {(() => {
+                const consensus = r.consensus_observed_facts;
+                const arms = r.metrics?.arms_compared ?? 0;
+                if (!consensus || arms < 2) return null;
+                const threshold = r.metrics?.consensus_threshold_used ?? 0;
+                const thresholdPct = r.metrics?.consensus_threshold_pct ?? 0;
+                const high = r.metrics?.high_confidence_fact_count ?? 0;
+                const medium = r.metrics?.medium_confidence_fact_count ?? 0;
+                return (
+                  <FRSection title="🤝 Cross-Arm Consensus" count={consensus.length}>
+                    {consensus.length === 0 ? (
+                      <p className="italic text-gray-400">
+                        No facts reached the {threshold}-of-{arms} agreement threshold on this clip.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-xs text-gray-500 italic mb-2">
+                          Facts agreed on by {threshold}+ of {arms} LLM arms ({thresholdPct}%).
+                          {" "}{high} high-confidence, {medium} medium-confidence.
+                          Higher agreement = more reliable observation.
+                        </p>
+                        <ul className="space-y-2">
+                          {consensus.map((cf, i) => {
+                            const pct = Math.round(cf.confidence * 100);
+                            const pill = cf.confidence >= 0.83
+                              ? "bg-green-100 text-green-700"
+                              : cf.confidence >= 0.67
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-gray-100 text-gray-600";
+                            return (
+                              <li key={i} className="flex items-start gap-2">
+                                <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium shrink-0 ${pill}`}>
+                                  {pct}%
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-gray-800 break-words">{cf.fact}</div>
+                                  <div className="text-[11px] text-gray-500 mt-0.5 break-words">
+                                    Agreement: {cf.agreement_count}/{cf.total_arms} arms — {cf.agreeing_arms.join(", ")}
+                                  </div>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </>
+                    )}
+                  </FRSection>
+                );
+              })()}
 
               <FRSection title="Audio Transcript">
                 <div className="text-xs text-gray-500 mb-1">
