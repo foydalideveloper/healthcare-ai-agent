@@ -248,7 +248,7 @@ export default function ChartPanel({
       if (day) params.set("day", String(day));
 
       const res = await fetch(
-        `http://localhost:8000/api/v1/hrt/drilldown?${params.toString()}`
+        `http://localhost:8888/api/v1/hrt/drilldown?${params.toString()}`
       );
       if (!res.ok) throw new Error(`API error: ${res.status}`);
       const real: DrilldownResponse = await res.json();

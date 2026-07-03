@@ -80,13 +80,26 @@ def _pick_clip_candidate(events: list[dict], user_message: str) -> Optional[dict
 
 _KST = timezone(timedelta(hours=9))
 
-GEMMA_URL = "http://100.69.125.64:8081/v1/chat/completions"
-GEMMA_MODEL = "gemma-4-E4B-it"
+OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
+GEMMA_MODEL = "gemma4:26b-a4b-it-q8_0"
+QWEN_MODEL = "qwen3-vl:30b-a3b-instruct-q4_K_M"
 NIM_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-QWEN_MODEL = "qwen/qwen3.5-397b-a17b"
 LLAMA4_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
+GEMINI_MODEL_DEFAULT = "gemini-2.5-pro"
 
-ALLOWED_MODELS = {"gemma_4_e4b", "qwen_3_5_vlm", "llama_4_maverick"}
+# Any acceptable tag → one of 4 canonical handlers. Mirrors
+# lifelog_reanalyze.MODEL_DISPATCH so the two endpoints stay in sync.
+MODEL_DISPATCH: dict[str, str] = {
+    "gemma4_26b_a4b_it_q8_0":            "gemma",
+    "gemma_4_e4b":                        "gemma",   # legacy
+    "qwen3_vl_30b_a3b_instruct_q4_k_m":  "qwen",
+    "qwen3_5_397b_a17b":                  "qwen",
+    "qwen_3_5_vlm":                       "qwen",    # legacy
+    "llama_4_maverick_17b_128e_inst":    "llama4",
+    "llama_4_maverick":                   "llama4",  # legacy
+    "gemini_2_5_pro":                     "gemini",
+}
+ALLOWED_MODELS = set(MODEL_DISPATCH)
 DEFAULT_LOOKBACK_DAYS = 7
 MAX_EVENTS_IN_CONTEXT = 200
 MAX_HISTORY_TURNS = 10
@@ -210,20 +223,75 @@ def _build_messages(events: list[dict], history: list[ChatTurn],
     return msgs
 
 
-async def _call_gemma(messages: list[dict]) -> tuple[str, int]:
+async def _call_ollama(messages: list[dict], model: str) -> tuple[str, int]:
+    """Local Ollama (OpenAI-compat). Used by both Gemma and Qwen text paths."""
     body = {
-        "model": GEMMA_MODEL,
+        "model": model,
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": 1024,
-        "chat_template_kwargs": {"enable_thinking": False},
     }
     t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        resp = await client.post(GEMMA_URL, json=body)
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(OLLAMA_URL, json=body)
         resp.raise_for_status()
     data = resp.json()
     answer = data["choices"][0]["message"]["content"].strip()
+    return answer, int((time.perf_counter() - t0) * 1000)
+
+
+def _load_gemini_config() -> tuple[Optional[str], str]:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    model = os.environ.get("GEMINI_MODEL") or GEMINI_MODEL_DEFAULT
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if not api_key and line.startswith("GEMINI_API_KEY="):
+                api_key = line.split("=", 1)[1].strip()
+            elif not os.environ.get("GEMINI_MODEL") and line.startswith("GEMINI_MODEL="):
+                v = line.split("=", 1)[1].strip()
+                if v:
+                    model = v
+    return api_key, model
+
+
+async def _call_gemini(messages: list[dict]) -> tuple[str, int]:
+    """Gemini (Google AI Studio), text-only. Converts OpenAI-shape messages
+    to Gemini's parts shape; the leading system message becomes
+    `system_instruction` and the rest become user/model `contents`."""
+    api_key, model = _load_gemini_config()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+    system_text = ""
+    contents: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        text = m.get("content") or ""
+        if role == "system":
+            system_text = (system_text + "\n" + text).strip() if system_text else text
+        elif role == "user":
+            contents.append({"role": "user", "parts": [{"text": text}]})
+        elif role == "assistant":
+            contents.append({"role": "model", "parts": [{"text": text}]})
+    body: dict = {
+        "contents": contents,
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024},
+    }
+    if system_text:
+        body["system_instruction"] = {"parts": [{"text": system_text}]}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+    t0 = time.perf_counter()
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        resp.raise_for_status()
+    data = resp.json()
+    answer = (
+        data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+    ).strip()
     return answer, int((time.perf_counter() - t0) * 1000)
 
 
@@ -258,12 +326,15 @@ async def lifelog_chat(req: ChatRequest):
     events = await _fetch_user_events(req.user_id, max(1, req.lookback_days))
     messages = _build_messages(events, req.history, req.message, req.lookback_days)
 
+    handler = MODEL_DISPATCH[req.model]
     try:
-        if req.model == "gemma_4_e4b":
-            answer, latency_ms = await _call_gemma(messages)
-        elif req.model == "qwen_3_5_vlm":
-            answer, latency_ms = await _call_nim(messages, QWEN_MODEL)
-        else:  # llama_4_maverick
+        if handler == "gemma":
+            answer, latency_ms = await _call_ollama(messages, GEMMA_MODEL)
+        elif handler == "qwen":
+            answer, latency_ms = await _call_ollama(messages, QWEN_MODEL)
+        elif handler == "gemini":
+            answer, latency_ms = await _call_gemini(messages)
+        else:  # llama4
             answer, latency_ms = await _call_nim(messages, LLAMA4_MODEL)
     except HTTPException:
         raise

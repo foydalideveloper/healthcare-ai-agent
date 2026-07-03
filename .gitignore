@@ -145,3 +145,7 @@ backend/glasses_watcher/processed*.json
 # Job 2 training datasets (large binary frames + JSONL, regenerable from DB + videos)
 training_data/
 backend/training_data/
+
+# OCR run artifacts (regenerable, do not commit)
+backend/glasses_watcher/failed_parses/
+test_data/

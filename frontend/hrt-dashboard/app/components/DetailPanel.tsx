@@ -495,7 +495,7 @@ export default function DetailPanel({
   // Fetch real event timeline for real dates (2026-04-16+).
   useEffect(() => {
     if (!isRealDate || !year || !month) return;
-    const url = `http://localhost:8000/api/v1/hrt/detail?user_id=${userId}`
+    const url = `http://localhost:8888/api/v1/hrt/detail?user_id=${userId}`
       + `&category=${categoryId}&year=${year}&month=${month}&day=${day}&hour=${hour}`;
     fetch(url)
       .then(r => r.ok ? r.json() : { events: [] })

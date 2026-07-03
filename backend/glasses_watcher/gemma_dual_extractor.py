@@ -33,8 +33,8 @@ from typing import Optional, Tuple
 import httpx
 
 
-GEMMA_BASE_URL = "http://100.69.125.64:8080"  # Mac mini Tailscale IP
-GEMMA_TIMEOUT_SEC = 30
+GEMMA_BASE_URL = "http://localhost:11434"  # Local Ollama
+GEMMA_TIMEOUT_SEC = 120
 GEMMA_FRAMES_PER_VIDEO = 6   # Lowered from 12 — fewer vision tokens reduces JSON parse failures on the small Gemma 4 E4B model.
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -157,7 +157,7 @@ def _post_to_gemma(content_blocks: list, max_tokens: int = 384) -> Tuple[Optiona
     # the small model's tendency to continue example JSON instead of
     # producing fresh output.
     body = {
-        "model": "gemma-4-E4B-it",
+        "model": "gemma4:26b-a4b-it-q8_0",
         "messages": [
             {"role": "system", "content": _GEMMA_SYSTEM_INSTRUCTION},
             {"role": "user", "content": content_blocks},

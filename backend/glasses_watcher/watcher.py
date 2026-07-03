@@ -131,8 +131,62 @@ if env_path.exists():
         elif line.startswith("SUPABASE_SERVICE_ROLE_KEY="):
             SUPABASE_KEY = line.split("=", 1)[1].strip()
 
-# Mac mini Tailscale IP — whisper.cpp large-v3 server (port 8082, separate from Gemma 8081)
-WHISPER_REMOTE_URL = "http://100.69.125.64:8082/inference"
+# Local faster-whisper. Primary = large-v3 on GPU, fallback = medium on CPU.
+# Models are lazy-loaded on first use and cached at module scope.
+WHISPER_PRIMARY_MODEL = "large-v3"
+WHISPER_PRIMARY_DEVICE = "cuda"
+WHISPER_PRIMARY_COMPUTE = "float16"
+WHISPER_FALLBACK_MODEL = "medium"
+WHISPER_FALLBACK_DEVICE = "cpu"
+WHISPER_FALLBACK_COMPUTE = "int8"
+_FW_PRIMARY = None
+_FW_FALLBACK = None
+
+
+def _get_fw_primary():
+    global _FW_PRIMARY
+    if _FW_PRIMARY is None:
+        from faster_whisper import WhisperModel
+        _FW_PRIMARY = WhisperModel(
+            WHISPER_PRIMARY_MODEL,
+            device=WHISPER_PRIMARY_DEVICE,
+            compute_type=WHISPER_PRIMARY_COMPUTE,
+        )
+    return _FW_PRIMARY
+
+
+def _get_fw_fallback():
+    global _FW_FALLBACK
+    if _FW_FALLBACK is None:
+        from faster_whisper import WhisperModel
+        _FW_FALLBACK = WhisperModel(
+            WHISPER_FALLBACK_MODEL,
+            device=WHISPER_FALLBACK_DEVICE,
+            compute_type=WHISPER_FALLBACK_COMPUTE,
+        )
+    return _FW_FALLBACK
+
+
+def _fw_transcribe_to_dict(model, audio_path, **kwargs):
+    """Run model.transcribe and assemble the same dict shape the old code expected."""
+    segments_iter, info = model.transcribe(
+        str(audio_path),
+        temperature=0,
+        vad_filter=True,
+        **kwargs,
+    )
+    parts = []
+    for s in segments_iter:
+        t = (s.text or "").strip()
+        if t:
+            parts.append(t)
+    text = " ".join(parts).strip()
+    return {
+        "transcript": text,
+        "language": info.language,
+        "duration": float(info.duration or 0),
+        "segments_count": len(parts),
+    }
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".webp"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv"}
@@ -1081,80 +1135,30 @@ cap.release()
         return None
 
     def _call_whisper_server(self, audio_path: Path) -> dict | None:
-        """Call the Mac mini whisper.cpp large-v3 server over Tailscale.
+        """Local faster-whisper large-v3 on GPU.
 
         large-v3 handles Korean/English mixed speech natively without hallucinating.
-        Returns None if the server is unreachable — caller falls back to local medium.
-
-        For long audio, whisper.cpp processes in 30s windows. We assemble all
-        segments returned in verbose_json so we get the FULL transcript, not
-        just the first window's `text` field.
+        Returns None if model fails (GPU OOM, missing CUDA, etc.) — caller falls
+        back to local medium on CPU.
         """
         try:
-            with open(audio_path, "rb") as f:
-                resp = httpx.post(
-                    WHISPER_REMOTE_URL,
-                    files={"file": ("audio.wav", f, "audio/wav")},
-                    data={
-                        "language": "auto",
-                        "response_format": "verbose_json",  # underscore, not hyphen
-                        "max_len": "0",                      # 0 = no per-segment length limit
-                        "temperature": "0",
-                    },
-                    timeout=180,  # longer videos need more time
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            # Some whisper.cpp versions return everything in `text`, others split into `segments`.
-            # If `segments` exists and is non-empty, concatenate ALL of them — that's the full
-            # transcript. If only `text` is set, use that.
-            segments = data.get("segments") or []
-            if segments:
-                text = " ".join(
-                    (seg.get("text") or "").strip()
-                    for seg in segments
-                    if isinstance(seg, dict) and seg.get("text")
-                ).strip()
-            else:
-                text = (data.get("text") or "").strip()
-            lang = data.get("language", "auto")
-            duration = data.get("duration", 0)
-            if not text:
-                print(f"    [whisper-remote] empty response — falling back to local")
+            model = _get_fw_primary()
+            r = _fw_transcribe_to_dict(model, audio_path, language=None)
+            if not r["transcript"]:
+                print(f"    [whisper-local] empty response — falling back to medium")
                 return None
-            seg_info = f"{len(segments)}seg" if segments else "1block"
-            print(f"    [whisper-remote] large-v3 | lang={lang} | {duration:.1f}s | {seg_info} | {len(text)} chars")
-            return {"transcript": text, "language": lang, "duration": duration}
+            print(
+                f"    [whisper-local] {WHISPER_PRIMARY_MODEL} | lang={r['language']} | "
+                f"{r['duration']:.1f}s | {r['segments_count']}seg | {len(r['transcript'])} chars"
+            )
+            return {
+                "transcript": r["transcript"],
+                "language": r["language"],
+                "duration": r["duration"],
+            }
         except Exception as e:
-            print(f"    [whisper-remote] unreachable ({e.__class__.__name__}) — falling back to local medium")
+            print(f"    [whisper-local] failed ({e.__class__.__name__}) — falling back to medium")
             return None
-
-    def _detect_language_for_production(self, model, audio_path: Path) -> str:
-        """
-        Two-pass language detection tuned for Korean production users.
-
-        Korean-accent speakers register as 'ko' even when speaking mostly English.
-        Rather than fighting that, we embrace it: route any Korean-detected audio to
-        Korean mode where Whisper transcribes faithfully instead of hallucinating.
-
-        Only use English mode when the audio is unambiguously English (prob >= 0.75
-        AND Korean prob < 0.20). Default fallback is Korean since production is Korean.
-        """
-        import whisper
-        try:
-            audio = whisper.load_audio(str(audio_path))
-            mel = whisper.log_mel_spectrogram(whisper.pad_or_trim(audio)).to(model.device)
-            _, probs = model.detect_language(mel)
-            ko_prob = probs.get("ko", 0)
-            en_prob = probs.get("en", 0)
-            print(f"    Lang detection: ko={ko_prob:.2f}  en={en_prob:.2f}")
-            if ko_prob >= 0.20:
-                return "ko"
-            if en_prob >= 0.75:
-                return "en"
-            return "ko"  # production default
-        except Exception:
-            return "ko"
 
     def _is_hallucinating(self, text: str) -> bool:
         """Detect Whisper hallucination or prompt bleed-through.
@@ -1195,58 +1199,81 @@ cap.release()
         if remote:
             return remote
 
-        # Fallback: local Whisper medium on CPU
+        # Fallback: local faster-whisper medium on CPU.
+        # Production is Korean-majority, so default language to "ko" with the
+        # Korean prompt to suppress mixed-speech hallucination loops.
         try:
-            import whisper
-            print("    Loading Whisper (medium, multilingual)...")
-            model = whisper.load_model("medium")
-
-            lang = self._detect_language_for_production(model, audio_path)
+            print(f"    Loading faster-whisper {WHISPER_FALLBACK_MODEL} on {WHISPER_FALLBACK_DEVICE}...")
+            model = _get_fw_fallback()
+            lang = "ko"  # production default; large-v3 already tried language-free above
             print(f"    Transcribing as: {lang}")
-            result = model.transcribe(
-                str(audio_path),
+            r = _fw_transcribe_to_dict(
+                model, audio_path,
                 language=lang,
-                initial_prompt=_WHISPER_PROMPT_KO if lang == "ko" else _WHISPER_PROMPT_EN,
+                initial_prompt=_WHISPER_PROMPT_KO,
                 task="transcribe",
                 condition_on_previous_text=False,
-                temperature=0,
             )
-            text = result["text"].strip()
+            text = r["transcript"]
 
-            # Hallucination check: Korean decoder loops on filler phrases when
-            # it encounters English phonemes it cannot decode.
-            # Retry with task="translate" so Whisper translates Korean words
-            # to English text — this preserves the MEANING of mixed-language
-            # speech (Korean words appear as their English equivalents rather
-            # than being silently dropped by the English-only decoder).
-            if lang == "ko" and self._is_hallucinating(text):
+            if self._is_hallucinating(text):
                 print(f"    [retry] Korean hallucination detected — retrying with translate task")
-                result_en = model.transcribe(
-                    str(audio_path),
+                r_en = _fw_transcribe_to_dict(
+                    model, audio_path,
                     task="translate",
                     initial_prompt=None,
                     condition_on_previous_text=False,
-                    temperature=0,
                 )
-                text_en = result_en["text"].strip()
+                text_en = r_en["transcript"]
                 if not self._is_hallucinating(text_en):
                     print(f"    [retry] Translation succeeded")
-                    return {"transcript": text_en, "language": "en"}
+                    return {"transcript": text_en, "language": "en", "duration": r_en["duration"]}
                 print(f"    [retry] Both hallucinated, using translation result as fallback")
-                return {"transcript": text_en or text, "language": "en"}
+                return {"transcript": text_en or text, "language": "en", "duration": r_en["duration"]}
 
             return {
                 "transcript": text,
-                "language": result.get("language", lang),
+                "language": r["language"] or lang,
+                "duration": r["duration"],
             }
         except Exception as e:
             print(f"    Whisper error: {e}")
             return None
 
-    # ── Process Video (visual + audio) ──
+    # ── Process Video (4-arm lifelog pipeline) ──
 
     def process_video(self, path: Path):
+        """Hand a new video clip to the 4-arm lifelog pipeline.
+
+        Gemma 4 26B A4B (local) + Qwen 3.5 VLM (local) + Llama 4 Maverick
+        (NIM) + Gemini 2.5 Pro. Each arm's events are written to
+        lifelog_event with a dynamic source_model tag derived from the
+        model id. See _lifelog_test.run for chunking + Whisper + Supabase
+        write logic. Image/audio paths are unaffected (still use the
+        local YOLO + faster-whisper helpers above).
+        """
         print(f"\n  [VIDEO] {path.name}")
+        try:
+            from _lifelog_test import run as lifelog_run
+            lifelog_run(
+                video_path=path,
+                compare=True,    # Qwen 3.5 VLM (local Ollama)
+                llama4=True,     # Llama 4 Maverick (NIM)
+                gemini=True,     # Gemini (Google AI Studio)
+                write_supabase=True,
+                user_id=TEST_USER_ID,
+            )
+        except Exception as e:
+            print(f"    ERROR in 4-arm lifelog pipeline: {type(e).__name__}: {e}")
+
+    # ── LEGACY: old YOLO + dual-extractor + Phase 2 multimodal pipeline ──
+    # Preserved for reference / rollback. Replaced 2026-05-26 by the
+    # 4-arm pipeline above (process_video). To re-enable, swap the names
+    # back. Reads the same image/audio helpers defined elsewhere in this
+    # class, so no extra deps needed.
+
+    def _process_video_legacy(self, path: Path):
+        print(f"\n  [VIDEO-LEGACY] {path.name}")
         transcript: str = ""  # Phase 2: captured if Whisper transcribes; passed to dual-extraction logger
 
         cap = cv2.VideoCapture(str(path))
@@ -1802,47 +1829,44 @@ cap.release()
     def process_audio(self, path: Path):
         print(f"\n  [AUDIO] {path.name}")
         try:
-            # Primary: remote large-v3 on Mac mini
-            remote = self._call_whisper_server(path)
-            if remote:
-                transcript = remote["transcript"]
-                lang = remote["language"]
-                duration = remote.get("duration", 0)
+            # Primary: local faster-whisper large-v3 on GPU
+            primary = self._call_whisper_server(path)
+            if primary:
+                transcript = primary["transcript"]
+                lang = primary["language"]
+                duration = primary.get("duration", 0)
             else:
-                # Fallback: local Whisper medium
-                import whisper
-                print("    Loading Whisper (medium, multilingual)...")
-                model = whisper.load_model("medium")
-                lang = self._detect_language_for_production(model, path)
+                # Fallback: local faster-whisper medium on CPU, Korean-biased prompt
+                print(f"    Loading faster-whisper {WHISPER_FALLBACK_MODEL} on {WHISPER_FALLBACK_DEVICE}...")
+                model = _get_fw_fallback()
+                lang = "ko"
                 print(f"    Transcribing as: {lang}")
-                result = model.transcribe(
-                    str(path),
+                r = _fw_transcribe_to_dict(
+                    model, path,
                     language=lang,
-                    initial_prompt=_WHISPER_PROMPT_KO if lang == "ko" else _WHISPER_PROMPT_EN,
+                    initial_prompt=_WHISPER_PROMPT_KO,
                     task="transcribe",
                     condition_on_previous_text=False,
-                    temperature=0,
                 )
-                transcript = result["text"].strip()
-                duration = result.get("duration", 0)
+                transcript = r["transcript"]
+                duration = r["duration"]
 
-            # Hallucination retry — only for local medium fallback path.
-            # large-v3 remote handles mixed speech natively; no retry needed there.
-            if not remote and lang == "ko" and self._is_hallucinating(transcript):
+            # Hallucination retry — only for fallback path.
+            # large-v3 primary handles mixed speech natively; no retry needed there.
+            if not primary and lang == "ko" and self._is_hallucinating(transcript):
                 print(f"    [retry] Korean hallucination detected — retrying with translate task")
-                result_en = model.transcribe(
-                    str(path),
+                r_en = _fw_transcribe_to_dict(
+                    model, path,
                     task="translate",
                     initial_prompt=None,
                     condition_on_previous_text=False,
-                    temperature=0,
                 )
-                text_en = result_en["text"].strip()
+                text_en = r_en["transcript"]
                 if not self._is_hallucinating(text_en):
                     print(f"    [retry] Translation succeeded")
                     transcript = text_en
                     lang = "en"
-                    duration = result_en.get("duration", duration)
+                    duration = r_en["duration"] or duration
                 else:
                     print(f"    [retry] Both hallucinated, using translation result as fallback")
                     transcript = text_en or transcript

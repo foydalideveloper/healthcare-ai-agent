@@ -46,17 +46,36 @@ router = APIRouter(prefix="/lifelog", tags=["lifelog"])
 
 _KST = timezone(timedelta(hours=9))
 
-# Endpoints (same as lifelog_chat.py — duplicated here so this module is
-# self-contained and doesn't import from a sibling that could change).
-GEMMA_URL = "http://100.69.125.64:8081/v1/chat/completions"
-GEMMA_MODEL = "gemma-4-E4B-it"
-WHISPER_REMOTE_URL = "http://100.69.125.64:8082/inference"
+# Endpoints — three local arms via Ollama (port 11434), Llama4 via NIM cloud,
+# Gemini via Google AI Studio. Whisper is local faster-whisper, not the old
+# Mac mini whisper-server.
+OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
+GEMMA_MODEL = "gemma4:26b-a4b-it-q8_0"
+QWEN_MODEL = "qwen3-vl:30b-a3b-instruct-q4_K_M"
 NIM_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-QWEN_MODEL = "qwen/qwen3.5-397b-a17b"
 LLAMA4_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
+GEMINI_MODEL_DEFAULT = "gemini-2.5-pro"
 
-ALLOWED_MODELS = {"gemma_4_e4b", "qwen_3_5_vlm", "llama_4_maverick"}
-GEMMA_MAX_FRAMES = 6   # Mac mini Gemma OOMs on 8 real frames; same cap used in _lifelog_test.py
+# Frontend can send either the new dynamic source tags (preferred — match what
+# _lifelog_test writes to Supabase) or the legacy hard-coded tags (kept so old
+# bookmarks still resolve). Each acceptable tag dispatches to one of 4 canonical
+# handlers below.
+MODEL_DISPATCH: dict[str, str] = {
+    # Gemma → local Ollama
+    "gemma4_26b_a4b_it_q8_0": "gemma",
+    "gemma_4_e4b":            "gemma",   # legacy
+    # Qwen → local Ollama
+    "qwen3_vl_30b_a3b_instruct_q4_k_m": "qwen",
+    "qwen3_5_397b_a17b":                "qwen",
+    "qwen_3_5_vlm":                     "qwen",  # legacy
+    # Llama 4 Maverick → NVIDIA NIM
+    "llama_4_maverick_17b_128e_inst": "llama4",
+    "llama_4_maverick":               "llama4",  # legacy
+    # Gemini 2.5 Pro → Google AI Studio
+    "gemini_2_5_pro": "gemini",
+}
+ALLOWED_MODELS = set(MODEL_DISPATCH)
+GEMMA_MAX_FRAMES = 8   # local Ollama Gemma 26B A4B handles 8 frames fine
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv"}
 
 # Where to look for the source clip. Mirrors lifelog_watcher.py's folders.
@@ -136,8 +155,24 @@ def _img_to_data_url(img, max_edge: int = 1024) -> str:
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 
+# Local faster-whisper model, lazy-loaded once per process.
+_FW_MODEL = None
+
+
+def _get_fw_model():
+    global _FW_MODEL
+    if _FW_MODEL is None:
+        from faster_whisper import WhisperModel
+        _FW_MODEL = WhisperModel("large-v3", device="cuda", compute_type="float16")
+    return _FW_MODEL
+
+
 def _whisper(video_path: Path) -> str:
-    """Extract audio + transcribe via Mac mini Whisper. Returns plain text."""
+    """Extract audio with ffmpeg, transcribe with local faster-whisper on GPU.
+
+    Returns the concatenated transcript text, or a "(whisper failed: ...)"
+    string on error (callers display it as the transcript excerpt verbatim).
+    """
     import subprocess
     audio_path = video_path.with_suffix(".reanalyze_audio.wav")
     try:
@@ -146,16 +181,16 @@ def _whisper(video_path: Path) -> str:
              "-ac", "1", "-ar", "16000", "-f", "wav", str(audio_path)],
             capture_output=True, check=True, timeout=300,
         )
-        with open(audio_path, "rb") as f:
-            resp = httpx.post(
-                WHISPER_REMOTE_URL,
-                files={"file": ("audio.wav", f, "audio/wav")},
-                data={"language": "auto", "response_format": "verbose_json",
-                      "max_len": "0", "temperature": "0"},
-                timeout=300,
-            )
-        resp.raise_for_status()
-        return (resp.json().get("text") or "").strip()
+        model = _get_fw_model()
+        segments_iter, _info = model.transcribe(
+            str(audio_path), language=None, temperature=0, vad_filter=True,
+        )
+        parts: list[str] = []
+        for s in segments_iter:
+            t = (s.text or "").strip()
+            if t:
+                parts.append(t)
+        return " ".join(parts).strip()
     except Exception as e:
         return f"(whisper failed: {type(e).__name__}: {str(e)[:120]})"
     finally:
@@ -195,23 +230,78 @@ def _build_content(frames: list, transcript: str, question: str, max_frames: int
     return content
 
 
-async def _call_gemma(content: list[dict]) -> tuple[str, int]:
+async def _call_ollama(content: list[dict], model: str) -> tuple[str, int]:
+    """Call local Ollama (OpenAI-compat). Used for both Gemma and Qwen."""
     body = {
-        "model": GEMMA_MODEL,
+        "model": model,
         "messages": [
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": content},
         ],
         "temperature": 0.2,
         "max_tokens": 512,
-        "chat_template_kwargs": {"enable_thinking": False},
     }
     t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(GEMMA_URL, json=body)
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(OLLAMA_URL, json=body)
         resp.raise_for_status()
     data = resp.json()
     return data["choices"][0]["message"]["content"].strip(), int((time.perf_counter() - t0) * 1000)
+
+
+def _load_gemini_config() -> tuple[Optional[str], str]:
+    """Return (api_key, model_id) for Gemini, reading env first then .env."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    model = os.environ.get("GEMINI_MODEL") or GEMINI_MODEL_DEFAULT
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if not api_key and line.startswith("GEMINI_API_KEY="):
+                api_key = line.split("=", 1)[1].strip()
+            elif not os.environ.get("GEMINI_MODEL") and line.startswith("GEMINI_MODEL="):
+                v = line.split("=", 1)[1].strip()
+                if v:
+                    model = v
+    return api_key, model
+
+
+async def _call_gemini(content: list[dict]) -> tuple[str, int]:
+    """Call Gemini (Google AI Studio). Converts OpenAI-shape content blocks
+    (text + image_url data URLs) to Gemini's parts shape."""
+    import base64
+    api_key, model = _load_gemini_config()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+    parts: list[dict] = []
+    for block in content:
+        if block.get("type") == "text":
+            parts.append({"text": block.get("text", "")})
+        elif block.get("type") == "image_url":
+            url = (block.get("image_url") or {}).get("url", "")
+            # Expect data:image/jpeg;base64,XXXX
+            if url.startswith("data:") and "," in url:
+                header, b64 = url.split(",", 1)
+                mime = header[5:].split(";", 1)[0] or "image/jpeg"
+                parts.append({"inline_data": {"mime_type": mime, "data": b64}})
+    body = {
+        "system_instruction": {"parts": [{"text": _SYSTEM}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+    t0 = time.perf_counter()
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        resp.raise_for_status()
+    data = resp.json()
+    text = (
+        data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+    ).strip()
+    return text, int((time.perf_counter() - t0) * 1000)
 
 
 async def _call_nim(content: list[dict], model: str) -> tuple[str, int]:
@@ -245,7 +335,7 @@ async def _call_nim(content: list[dict], model: str) -> tuple[str, int]:
 
 class ReanalyzeRequest(BaseModel):
     user_id: int
-    model: str = Field(..., description="gemma_4_e4b | qwen_3_5_vlm | llama_4_maverick")
+    model: str = Field(..., description="any tag from MODEL_DISPATCH (gemma4_26b_a4b_it_q8_0 | qwen3_vl_30b_a3b_instruct_q4_k_m | llama_4_maverick_17b_128e_inst | gemini_2_5_pro). Legacy tags also accepted.")
     source_video: str = Field(..., description="filename only, e.g. '20260513_iOS.MOV'")
     question: str
     frames: int = 8
@@ -280,15 +370,18 @@ async def reanalyze_clip(user_id: int, model: str, source_video: str,
     if not sampled:
         raise HTTPException(status_code=500, detail="no frames could be sampled from clip")
 
-    max_frames_for_model = GEMMA_MAX_FRAMES if model == "gemma_4_e4b" else len(sampled)
+    handler = MODEL_DISPATCH[model]
+    max_frames_for_model = GEMMA_MAX_FRAMES if handler == "gemma" else len(sampled)
     content = _build_content(sampled, transcript, question, max_frames_for_model)
 
     try:
-        if model == "gemma_4_e4b":
-            answer, latency_ms = await _call_gemma(content)
-        elif model == "qwen_3_5_vlm":
-            answer, latency_ms = await _call_nim(content, QWEN_MODEL)
-        else:
+        if handler == "gemma":
+            answer, latency_ms = await _call_ollama(content, GEMMA_MODEL)
+        elif handler == "qwen":
+            answer, latency_ms = await _call_ollama(content, QWEN_MODEL)
+        elif handler == "gemini":
+            answer, latency_ms = await _call_gemini(content)
+        else:  # llama4
             answer, latency_ms = await _call_nim(content, LLAMA4_MODEL)
     except HTTPException:
         raise

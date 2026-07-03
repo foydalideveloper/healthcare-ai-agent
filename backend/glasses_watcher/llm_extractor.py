@@ -51,8 +51,8 @@ LLM_FALLBACK = "gemini"        # only used when primary errors out (None return)
 
 HAIKU_MODEL       = "claude-haiku-4-5-20251001"
 GEMINI_MODEL      = "gemini-2.5-flash"
-GEMMA_LOCAL_URL   = "http://100.69.125.64:8080/v1/chat/completions"  # Mac mini Tailscale
-GEMMA_LOCAL_MODEL = "gemma-4-E4B-it"
+GEMMA_LOCAL_URL   = "http://localhost:11434/v1/chat/completions"  # Local Ollama
+GEMMA_LOCAL_MODEL = "gemma4:26b-a4b-it-q8_0"
 
 SYSTEM_PROMPT = """You extract structured health data from a voice transcript.
 The user speaks mixed Korean and English about their daily health.
@@ -203,7 +203,7 @@ def _extract_via_gemma_local(transcript: str) -> dict | None:
             "response_format": {"type": "json_object"},
             "chat_template_kwargs": {"enable_thinking": False},
         },
-        timeout=30,
+        timeout=120,
     )
     resp.raise_for_status()
     data = resp.json()

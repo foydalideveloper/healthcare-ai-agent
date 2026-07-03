@@ -6,9 +6,13 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
-const API_BASE = "http://localhost:8000/api/v1";
+const API_BASE = "http://localhost:8888/api/v1";
 
-type ModelKey = "gemma_4_e4b" | "qwen_3_5_vlm" | "llama_4_maverick";
+type ModelKey =
+  | "gemma4_26b_a4b_it_q8_0"
+  | "qwen3_5_397b_a17b"
+  | "llama_4_maverick_17b_128e_inst"
+  | "gemini_2_5_pro";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -27,23 +31,29 @@ interface ChatMessage {
 }
 
 const MODEL_INFO: Record<ModelKey, { label: string; tag: string; cls: string; hint: string }> = {
-  gemma_4_e4b: {
-    label: "Gemma 4",
-    tag: "Mac mini · fast · free",
+  gemma4_26b_a4b_it_q8_0: {
+    label: "Gemma 4 26B A4B",
+    tag: "local · MoE · free",
     cls: "border-blue-500 bg-blue-50 text-blue-700",
     hint: "Local — fastest, no NIM credits used.",
   },
-  qwen_3_5_vlm: {
-    label: "Qwen 3.5",
+  qwen3_5_397b_a17b: {
+    label: "Qwen 3.5 VLM",
     tag: "NIM · 397B · deep",
     cls: "border-purple-500 bg-purple-50 text-purple-700",
     hint: "Large NIM model — good for long-context reasoning over the day.",
   },
-  llama_4_maverick: {
-    label: "Llama 4",
+  llama_4_maverick_17b_128e_inst: {
+    label: "Llama 4 Maverick",
     tag: "NIM · 400B · strong",
     cls: "border-emerald-500 bg-emerald-50 text-emerald-700",
     hint: "Maverick — strongest reasoning. Burns NIM credits fastest.",
+  },
+  gemini_2_5_pro: {
+    label: "Gemini 2.5 Pro",
+    tag: "cloud · Google · paid",
+    cls: "border-amber-500 bg-amber-50 text-amber-700",
+    hint: "Gemini 2.5 Pro — strong long-context + multimodal, paid Google API.",
   },
 };
 
@@ -57,7 +67,7 @@ const SAMPLE_QUESTIONS = [
 
 export default function LifelogAskPage() {
   const [userId, setUserId] = useState(1);
-  const [model, setModel] = useState<ModelKey>("gemma_4_e4b");
+  const [model, setModel] = useState<ModelKey>("gemma4_26b_a4b_it_q8_0");
   const [lookbackDays, setLookbackDays] = useState(7);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -150,7 +160,7 @@ export default function LifelogAskPage() {
               <h1 className="text-2xl font-bold text-gray-900">Ask your day</h1>
             </div>
             <p className="text-xs text-gray-500">
-              Chat with Gemma 4 / Qwen 3.5 / Llama 4 about everything your AI glasses recorded.
+              Chat with Gemma 4 / Qwen 3.5 / Llama 4 / Gemini 2.5 about everything your AI glasses recorded.
               Triple-H Co., Ltd. | Patent No. 10-2025-0145274
             </p>
           </div>

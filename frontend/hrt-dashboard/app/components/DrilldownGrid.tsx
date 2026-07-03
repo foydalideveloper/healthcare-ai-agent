@@ -836,7 +836,7 @@ export default function DrilldownGrid({
       if (month) params.set("month", String(month));
       if (day) params.set("day", String(day));
 
-      const res = await fetch(`http://localhost:8000/api/v1/hrt/drilldown?${params.toString()}`);
+      const res = await fetch(`http://localhost:8888/api/v1/hrt/drilldown?${params.toString()}`);
       if (!res.ok) throw new Error(`API error: ${res.status}`);
       const real: DrilldownResponse = await res.json();
       const next = mergeRealWithMock(real, mock, level, year, month, day);
