@@ -76,4 +76,4 @@ docs/             - Documentation
 
 ## Authoritative project state
 
-For 0-to-100% project context (locked decisions, hardware, pipelines, open questions, future plans), read **`~/.claude/projects/C--Users-tripleh/memory/project_healthcare_complete_handoff.md`** first. This file (`CLAUDE.md`) is the structural overview; the handoff is the operational source of truth.
+For 0-to-100% project context (locked decisions, hardware, pipelines, open questions, future plans), start with **`handoff.md`** at the repo root (the operational source of truth), backed by the in-repo Claude Code memory snapshot in **`docs/memory/`** — begin with `docs/memory/MEMORY.md`, which indexes the per-topic memory files. This file (`CLAUDE.md`) is the structural overview.
